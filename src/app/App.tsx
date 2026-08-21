@@ -3,6 +3,7 @@ import { AuthBoundary, useAuth } from '../auth'
 import { AnalysisControl } from '../components/AnalysisControl'
 import { DailyHistory } from '../components/DailyHistory'
 import { IntelligenceDesk } from '../components/IntelligenceDesk'
+import { ResizablePanelGrid } from '../components/ResizablePanelGrid'
 import { TerminalFooter } from '../components/TerminalFooter'
 import { TerminalHeader } from '../components/TerminalHeader'
 import { TickerRibbon } from '../components/TickerRibbon'
@@ -77,8 +78,8 @@ function Workstation() {
         canLogout={auth.canLogout}
       />
       <TickerRibbon />
-      <main id="workspace" className="terminal-grid" tabIndex={-1}>
-        <section className="terminal-panel terminal-grid__input" aria-labelledby="input-panel-heading">
+      <ResizablePanelGrid>
+        <section id="input-panel" className="terminal-panel terminal-grid__input" aria-labelledby="input-panel-heading">
           <header className="terminal-panel__header">
             <span className="terminal-panel__code">01 // INPUT</span>
             <h2 id="input-panel-heading" className="terminal-panel__title">Analysis Control</h2>
@@ -119,7 +120,7 @@ function Workstation() {
           </div>
         </section>
 
-        <section className="terminal-panel terminal-grid__desk" aria-labelledby="desk-panel-heading">
+        <section id="intelligence-panel" className="terminal-panel terminal-grid__desk" aria-labelledby="desk-panel-heading">
           <header className="terminal-panel__header">
             <span className="terminal-panel__code">02 // INTELLIGENCE DESK</span>
             <h2 id="desk-panel-heading" className="terminal-panel__title">Live Analysis</h2>
@@ -129,7 +130,7 @@ function Workstation() {
           </div>
         </section>
 
-        <section className="terminal-panel terminal-grid__history" aria-labelledby="history-panel-heading">
+        <section id="archive-panel" className="terminal-panel terminal-grid__history" aria-labelledby="history-panel-heading">
           <header className="terminal-panel__header">
             <span className="terminal-panel__code">03 // ARCHIVE</span>
             <h2 id="history-panel-heading" className="terminal-panel__title">Daily History</h2>
@@ -144,7 +145,7 @@ function Workstation() {
             />
           </div>
         </section>
-      </main>
+      </ResizablePanelGrid>
       <TerminalFooter />
     </div>
   )

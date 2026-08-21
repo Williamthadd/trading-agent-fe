@@ -134,6 +134,18 @@ async function expectWheelScrollable(page: Page, scroller: Locator): Promise<voi
   await expect.poll(() => scroller.evaluate((node) => node.scrollTop)).toBeGreaterThan(0)
 }
 
+async function dragHorizontally(page: Page, handle: Locator, distance: number): Promise<void> {
+  const box = await handle.boundingBox()
+  expect(box).not.toBeNull()
+  if (!box) return
+  const startX = box.x + box.width / 2
+  const startY = box.y + box.height / 2
+  await page.mouse.move(startX, startY)
+  await page.mouse.down()
+  await page.mouse.move(startX + distance, startY, { steps: 5 })
+  await page.mouse.up()
+}
+
 function overlaps(a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }): boolean {
   return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
 }
@@ -164,6 +176,15 @@ for (const viewport of [
     await expect(page.getByRole('heading', { name: 'Analysis Control' })).toBeVisible()
     await expect(page.locator('#terminal-text-scale')).toHaveValue(String(viewport.scale))
     await expect(page.locator('html')).toHaveCSS('--text-scale', String(viewport.scale / 100))
+    const [providerBox, modelGridBox] = await Promise.all([
+      page.getByLabel('Provider').boundingBox(),
+      page.locator('.model-routing-grid').boundingBox(),
+    ])
+    expect(providerBox).not.toBeNull()
+    expect(modelGridBox).not.toBeNull()
+    if (providerBox && modelGridBox) {
+      expect(modelGridBox.y - (providerBox.y + providerBox.height)).toBeGreaterThanOrEqual(10)
+    }
     await expectNoPageOverflow(page)
     await page.screenshot({
       path: testInfo.outputPath(`idle-${viewport.width}x${viewport.height}-${viewport.scale}.png`),
@@ -173,6 +194,55 @@ for (const viewport of [
     await expect(page.locator('#terminal-text-scale')).toHaveValue(String(viewport.scale))
   })
 }
+
+test('desktop workstation panels resize in both directions and persist their widths', async ({ page }) => {
+  await mockApi(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/')
+
+  const inputPanel = page.locator('#input-panel')
+  const deskPanel = page.locator('#intelligence-panel')
+  const archivePanel = page.locator('#archive-panel')
+  const inputHandle = page.getByRole('separator', { name: 'Resize Input and Intelligence Desk panels' })
+  const archiveHandle = page.getByRole('separator', { name: 'Resize Intelligence Desk and Archive panels' })
+  await expect(inputHandle).toBeVisible()
+  await expect(archiveHandle).toBeVisible()
+
+  const initialInputWidth = await inputPanel.evaluate((node) => node.getBoundingClientRect().width)
+  const initialDeskWidth = await deskPanel.evaluate((node) => node.getBoundingClientRect().width)
+  await dragHorizontally(page, inputHandle, 120)
+  await expect.poll(() => inputPanel.evaluate((node) => node.getBoundingClientRect().width))
+    .toBeGreaterThan(initialInputWidth + 100)
+  await expect.poll(() => deskPanel.evaluate((node) => node.getBoundingClientRect().width))
+    .toBeLessThan(initialDeskWidth - 100)
+
+  await inputHandle.focus()
+  await page.keyboard.press('Enter')
+  await expect.poll(() => inputPanel.evaluate((node) => node.getBoundingClientRect().width))
+    .toBeLessThan(initialInputWidth + 5)
+
+  const initialArchiveWidth = await archivePanel.evaluate((node) => node.getBoundingClientRect().width)
+  await dragHorizontally(page, archiveHandle, -100)
+  await expect.poll(() => archivePanel.evaluate((node) => node.getBoundingClientRect().width))
+    .toBeGreaterThan(initialArchiveWidth + 80)
+
+  await archiveHandle.focus()
+  const expandedArchiveWidth = await archivePanel.evaluate((node) => node.getBoundingClientRect().width)
+  await page.keyboard.press('ArrowRight')
+  await expect.poll(
+    () => archivePanel.evaluate((node) => node.getBoundingClientRect().width),
+  ).toBeLessThan(expandedArchiveWidth)
+
+  const beforeReload = await archivePanel.evaluate((node) => node.getBoundingClientRect().width)
+  await page.reload()
+  await expect.poll(() => archivePanel.evaluate((node) => node.getBoundingClientRect().width))
+    .toBeCloseTo(beforeReload, 0)
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(inputHandle).toBeHidden()
+  await expect(archiveHandle).toBeHidden()
+  await expectNoPageOverflow(page)
+})
 
 test('active live wire, focus rings, and reduced motion', async ({ page }, testInfo) => {
   await page.emulateMedia({ reducedMotion: 'reduce' })

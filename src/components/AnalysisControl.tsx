@@ -379,7 +379,7 @@ export function AnalysisControl({
           </select>
           {fieldError('provider')}
         </label>
-        <div className="form-grid">
+        <div className="form-grid model-routing-grid">
           <label className="field">
             <span>Quick Model</span>
             <select value={state.quickModel} onChange={(event) => update('quickModel', event.target.value)}>
