@@ -1,0 +1,30 @@
+:root {
+  --text-scale: 1.1;
+  --black: #030405;
+  --canvas: #07090a;
+  --surface: #0c0f11;
+  --surface-2: #111518;
+  --surface-3: #171c1f;
+  --line: #293036;
+  --line-soft: #1b2226;
+  --text: #e5e8e8;
+  --muted: #8b969c;
+  --dim: #626c71;
+  --orange: #ff9f1a;
+  --orange-2: #ffc15a;
+  --cyan: #2cd9e8;
+  --green: #52de86;
+  --red: #ff5d64;
+  --yellow: #f1d44c;
+  --blue: #62a7ff;
+  --shadow: 0 18px 60px rgb(0 0 0 / 35%);
+  --mono: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --focus-ring: 0 0 0 2px var(--black), 0 0 0 4px var(--orange-2);
+  --positive-bg: rgb(82 222 134 / 8%);
+  --negative-bg: rgb(255 93 100 / 8%);
+  --warning-bg: rgb(241 212 76 / 8%);
+  --data-bg: rgb(44 217 232 / 7%);
+  --command-bg: rgb(255 159 26 / 8%);
+}

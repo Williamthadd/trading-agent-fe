@@ -1,0 +1,281 @@
+.safe-markdown {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text, #e5e8e8);
+  font-family: var(--sans, Inter, ui-sans-serif, system-ui, sans-serif);
+  font-size: calc(12px * var(--text-scale, 1.1));
+  line-height: 1.72;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.safe-markdown > :first-child {
+  margin-block-start: 0;
+}
+
+.safe-markdown > :last-child {
+  margin-block-end: 0;
+}
+
+.safe-markdown p,
+.safe-markdown ul,
+.safe-markdown ol,
+.safe-markdown blockquote,
+.safe-markdown .md-table-scroll,
+.safe-markdown .md-code-block,
+.safe-markdown .md-budget-remainder {
+  margin-block: 0 12px;
+}
+
+.safe-markdown h1,
+.safe-markdown h2,
+.safe-markdown h3,
+.safe-markdown h4,
+.safe-markdown h5,
+.safe-markdown h6 {
+  margin: 18px 0 8px;
+  color: var(--cyan, #2cd9e8);
+  font-family: var(--mono, "Cascadia Mono", Consolas, monospace);
+  font-weight: 700;
+  line-height: 1.28;
+  letter-spacing: 0.025em;
+  overflow-wrap: anywhere;
+}
+
+.safe-markdown h1 {
+  padding-block-end: 7px;
+  border-bottom: 1px solid var(--line, #293036);
+  color: var(--orange, #ff9f1a);
+  font-size: calc(18px * var(--text-scale, 1.1));
+}
+
+.safe-markdown h2 {
+  font-size: calc(16px * var(--text-scale, 1.1));
+}
+
+.safe-markdown h3 {
+  font-size: calc(14px * var(--text-scale, 1.1));
+}
+
+.safe-markdown h4 {
+  font-size: calc(13px * var(--text-scale, 1.1));
+}
+
+.safe-markdown h5,
+.safe-markdown h6 {
+  color: var(--blue, #62a7ff);
+  font-size: calc(12px * var(--text-scale, 1.1));
+}
+
+.safe-markdown strong {
+  color: #f6f8f8;
+  font-weight: 750;
+}
+
+.safe-markdown em {
+  color: #d8e0e2;
+}
+
+.safe-markdown del {
+  color: var(--muted, #8b969c);
+  text-decoration-color: var(--red, #ff5d64);
+}
+
+.safe-markdown a {
+  color: var(--cyan, #2cd9e8);
+  text-decoration-color: rgb(44 217 232 / 55%);
+  text-underline-offset: 0.18em;
+}
+
+.safe-markdown a:hover {
+  color: #8ff3fb;
+  text-decoration-color: currentColor;
+}
+
+.safe-markdown a:focus-visible,
+.safe-markdown .md-table-scroll:focus-visible,
+.safe-markdown .md-code-block:focus-visible,
+.safe-markdown .md-budget-remainder:focus-visible {
+  outline: 2px solid var(--orange, #ff9f1a);
+  outline-offset: 2px;
+}
+
+.safe-markdown :not(pre) > code {
+  padding: 1px 4px;
+  border: 1px solid #26343a;
+  background: #070b0d;
+  color: var(--green, #52de86);
+  font-family: var(--mono, "Cascadia Mono", Consolas, monospace);
+  font-size: calc(11px * var(--text-scale, 1.1));
+  overflow-wrap: anywhere;
+}
+
+.safe-markdown .md-code-block,
+.safe-markdown .md-budget-remainder {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  padding: 12px 14px;
+  border: 1px solid #263036;
+  border-left: 3px solid var(--green, #52de86);
+  background: #050809;
+  color: #dce7df;
+  font-family: var(--mono, "Cascadia Mono", Consolas, monospace);
+  font-size: calc(11px * var(--text-scale, 1.1));
+  line-height: 1.58;
+  overflow: auto;
+  overscroll-behavior-inline: contain;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.safe-markdown .md-code-block code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: inherit;
+}
+
+.safe-markdown .md-budget-remainder {
+  border-left-color: var(--yellow, #f1d44c);
+  color: #ece5ba;
+}
+
+.safe-markdown blockquote {
+  padding: 9px 12px;
+  border-left: 3px solid var(--cyan, #2cd9e8);
+  background: rgb(44 217 232 / 6%);
+  color: #dce8ea;
+}
+
+.safe-markdown ul,
+.safe-markdown ol {
+  padding-inline-start: 24px;
+}
+
+.safe-markdown li {
+  padding-inline-start: 2px;
+  margin-block: 3px;
+}
+
+.safe-markdown li::marker {
+  color: var(--orange, #ff9f1a);
+  font-family: var(--mono, "Cascadia Mono", Consolas, monospace);
+  font-weight: 700;
+}
+
+.safe-markdown hr {
+  height: 0;
+  margin: 18px 0;
+  border: 0;
+  border-top: 1px solid var(--line, #293036);
+}
+
+.safe-markdown .md-table-scroll {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  border: 1px solid var(--line, #293036);
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.safe-markdown table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  background: #080b0d;
+  font-variant-numeric: tabular-nums;
+}
+
+.safe-markdown th,
+.safe-markdown td {
+  max-width: 48ch;
+  padding: 7px 9px;
+  border-right: 1px solid var(--line-soft, #1b2226);
+  border-bottom: 1px solid var(--line-soft, #1b2226);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.safe-markdown th:last-child,
+.safe-markdown td:last-child {
+  border-right: 0;
+}
+
+.safe-markdown tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.safe-markdown th {
+  background: #111518;
+  color: var(--orange-2, #ffc15a);
+  font-family: var(--mono, "Cascadia Mono", Consolas, monospace);
+  font-size: calc(10px * var(--text-scale, 1.1));
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.safe-markdown tbody tr:nth-child(even) {
+  background: #0c1012;
+}
+
+.safe-markdown .md-align-center {
+  text-align: center;
+}
+
+.safe-markdown .md-align-right {
+  text-align: right;
+}
+
+.safe-markdown .md-signal {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid currentColor;
+  font-family: var(--mono, "Cascadia Mono", Consolas, monospace);
+  font-size: calc(10px * var(--text-scale, 1.1));
+  font-weight: 800;
+  line-height: 1.45;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+  vertical-align: 0.08em;
+  white-space: nowrap;
+}
+
+.safe-markdown .md-signal--positive {
+  background: rgb(82 222 134 / 8%);
+  color: var(--green, #52de86);
+}
+
+.safe-markdown .md-signal--negative {
+  background: rgb(255 93 100 / 8%);
+  color: var(--red, #ff5d64);
+}
+
+.safe-markdown .md-signal--neutral {
+  background: rgb(241 212 76 / 8%);
+  color: var(--yellow, #f1d44c);
+}
+
+@media (max-width: 580px) {
+  .safe-markdown .md-code-block,
+  .safe-markdown .md-budget-remainder {
+    padding: 10px;
+  }
+
+  .safe-markdown th,
+  .safe-markdown td {
+    padding: 6px 7px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .safe-markdown *,
+  .safe-markdown *::before,
+  .safe-markdown *::after {
+    scroll-behavior: auto !important;
+  }
+}

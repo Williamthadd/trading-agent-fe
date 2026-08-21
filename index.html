@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#030405" />
+    <meta name="color-scheme" content="dark" />
+    <title>TradingAgents Workstation</title>
+    <script>
+      ;(() => {
+        try {
+          const stored = localStorage.getItem('tradingagents.web.textScale.v1')
+          const raw = stored === null ? 110 : Number(stored)
+          const clamped = Number.isFinite(raw)
+            ? Math.min(160, Math.max(85, 85 + Math.round((raw - 85) / 5) * 5))
+            : 110
+          document.documentElement.style.setProperty('--text-scale', String(clamped / 100))
+        } catch {
+          document.documentElement.style.setProperty('--text-scale', '1.1')
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
