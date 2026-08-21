@@ -30,8 +30,11 @@ function GoogleMark() {
 function Brand() {
   return (
     <div className="auth-brand" aria-label="TradingAgents">
-      <span>TRADING</span>
-      <span className="auth-brand-accent">AGENTS</span>
+      <img className="auth-brand-logo" src="/logo.png" alt="" />
+      <span className="auth-brand-wordmark" aria-hidden="true">
+        <span>TRADING</span>
+        <span className="auth-brand-accent">AGENTS</span>
+      </span>
     </div>
   )
 }
