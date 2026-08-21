@@ -43,21 +43,27 @@ export const FinalDecision = memo(function FinalDecision({ run, onCopy }: FinalD
         <div><span>PORTFOLIO DESK</span><h3 id="decision-heading">Final Trading Decision</h3></div>
         <button type="button" onClick={() => onCopy(decision.raw, 'Decision')}>COPY</button>
       </div>
-      <div className={`decision-hero decision-hero--${tone}`}>
-        <span>PORTFOLIO MANAGER VERDICT</span>
-        <div>
-          <h4>{decision.signal}</h4>
-          <strong>FINAL</strong>
+      <div className="decision-scroll" tabIndex={0} aria-label="Scrollable final decision analysis">
+        <div className={`decision-hero decision-hero--${tone}`}>
+          <span>PORTFOLIO MANAGER VERDICT</span>
+          <div>
+            <h4>{decision.signal}</h4>
+            <strong>FINAL</strong>
+          </div>
         </div>
+        {decision.fields.length > 0 && (
+          <dl className="decision-fields">
+            {decision.fields.map(([label, value]) => (
+              <div key={`${label}:${value}`}><dt>{label}</dt><dd>{value}</dd></div>
+            ))}
+          </dl>
+        )}
+        <SafeMarkdown
+          content={decision.narrative}
+          className="decision-narrative"
+          ariaLabel="Portfolio manager decision narrative"
+        />
       </div>
-      {decision.fields.length > 0 && (
-        <dl className="decision-fields">
-          {decision.fields.map(([label, value]) => (
-            <div key={`${label}:${value}`}><dt>{label}</dt><dd>{value}</dd></div>
-          ))}
-        </dl>
-      )}
-      <SafeMarkdown content={decision.narrative} ariaLabel="Portfolio manager decision narrative" />
     </section>
   )
 })

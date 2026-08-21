@@ -47,7 +47,12 @@ export function Reports({ run, onCopy }: ReportsProps) {
         <button type="button" onClick={copyAll} disabled={!reports.length}>COPY ALL</button>
       </div>
       {reports.length ? (
-        <div className="report-list" ref={listRef}>
+        <div
+          className="report-list"
+          ref={listRef}
+          tabIndex={0}
+          aria-label="Scrollable analysis reports"
+        >
           {reports.map((report, index) => (
             <details
               className="report-card"
