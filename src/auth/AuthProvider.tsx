@@ -8,159 +8,264 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { onAuthStateChanged, signOut as firebaseSignOut, type Auth } from 'firebase/auth'
+import { onAuthStateChanged, signOut as firebaseSignOut, type User } from 'firebase/auth'
 
-import { apiClient, apiUrl } from '../api/client'
-import { ApiError, readableError } from '../api/errors'
-import type {
-  AuthConfigResponse,
-  FirebaseWebConfig,
-  SessionResponse,
-  SessionUser,
-} from '../api/types'
 import {
-  friendlyFirebaseError,
-  initializeFirebaseAuth,
-  signInWithEmail,
-  signInWithGoogle,
-  type FirebaseAuthUser,
-} from './firebase'
+  ensureFirebaseAuthPersistence,
+  firebaseAuth,
+  firebaseClientInitializationError,
+  getFirebaseConfigValidation,
+} from '../firebase/client'
+import {
+  isAllowedFirebaseIdentity,
+  isAllowedLoginEmail,
+  TRADING_APP_ACCESS_DENIED_MESSAGE,
+} from './accessPolicy'
+import { friendlyFirebaseError, signInWithEmail, signInWithGoogle } from './firebase'
 
 export type AuthPhase =
   | 'initializing'
   | 'signed_out'
   | 'submitting'
+  | 'checking_access'
   | 'authenticated'
   | 'setup_required'
-  | 'forbidden'
+  | 'permission_denied'
+  | 'firestore_unavailable'
   | 'error'
 
-export type AuthActivity = 'initializing' | 'signing_in' | 'signing_out' | 'verifying' | null
+export type AuthActivity =
+  | 'initializing'
+  | 'signing_in'
+  | 'signing_out'
+  | 'checking_access'
+  | null
+
+export interface AuthUser {
+  uid: string
+  email: string | null
+  name?: string | null
+  picture?: string | null
+  email_verified?: boolean
+}
+
+export type VerifyFirestoreAccess = (uid: string) => Promise<void>
+export type ProtectedCleanup = () => void
 
 interface AuthState {
   phase: AuthPhase
   activity: AuthActivity
-  config: AuthConfigResponse | null
-  session: SessionResponse | null
+  user: AuthUser | null
   error: string | null
   setupMessage: string | null
   missing: string[]
 }
 
 export interface AuthContextValue extends AuthState {
-  user: SessionUser | null
-  authRequired: boolean | null
+  authRequired: true
   canLogout: boolean
   loginWithGoogle: () => Promise<void>
   loginWithEmail: (email: string, password: string) => Promise<void>
   logout: () => Promise<void>
   getIdToken: (forceRefresh?: boolean) => Promise<string | null>
-  invalidateSession: (message?: string) => Promise<void>
   retry: () => void
+  revalidateFirestoreAccess: () => void
+  registerProtectedCleanup: (cleanup: ProtectedCleanup) => () => void
 }
 
 const initialState: AuthState = {
   phase: 'initializing',
   activity: 'initializing',
-  config: null,
-  session: null,
+  user: null,
   error: null,
   setupMessage: null,
   missing: [],
 }
 
+const missingAccessVerifier: VerifyFirestoreAccess = async () => {
+  const error = new Error('Firestore history access verification is not configured.')
+  Object.assign(error, { code: 'failed-precondition' })
+  throw error
+}
+
 const AuthContext = createContext<AuthContextValue | null>(null)
 
-function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === 'AbortError'
-}
-
-function statusOf(error: unknown): number | null {
-  if (error instanceof ApiError) return error.status
-  if (typeof error !== 'object' || error === null || !('status' in error)) return null
-  const status = (error as { status?: unknown }).status
-  return typeof status === 'number' ? status : null
-}
-
-function authenticationErrorMessage(error: unknown, fallback: string): string {
-  if (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    typeof (error as { code?: unknown }).code === 'string' &&
-    (error as { code: string }).code.startsWith('auth/')
-  ) {
-    return friendlyFirebaseError(error)
+function safeUser(user: User): AuthUser {
+  return {
+    uid: user.uid,
+    email: user.email,
+    name: user.displayName,
+    picture: user.photoURL,
+    email_verified: user.emailVerified,
   }
-  return readableError(error, fallback)
 }
 
-function isFirebaseWebConfig(
-  value: AuthConfigResponse['firebase'],
-): value is FirebaseWebConfig {
-  if (typeof value !== 'object' || value === null) return false
-  const candidate = value as Partial<FirebaseWebConfig>
-  return [candidate.apiKey, candidate.authDomain, candidate.projectId, candidate.appId].every(
-    (entry) => typeof entry === 'string' && entry.trim().length > 0,
-  )
+function errorCode(error: unknown): string {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return ''
+  const code = (error as { code?: unknown }).code
+  if (typeof code !== 'string') return ''
+  return code.toLowerCase().replace(/^firestore\//, '')
 }
 
-function safeMissingNames(names: string[]): string[] {
-  const safe = names
-    .filter((name) => /^[A-Za-z][A-Za-z0-9_]{0,127}$/.test(name))
-    .slice(0, 24)
-  return safe.length > 0 ? safe : ['FIREBASE_WEB_CONFIGURATION']
+interface AccessFailure {
+  phase: 'permission_denied' | 'firestore_unavailable'
+  message: string
+  unauthenticated: boolean
+}
+
+function normalizeAccessFailure(error: unknown): AccessFailure {
+  switch (errorCode(error)) {
+    case 'permission-denied':
+      return {
+        phase: 'permission_denied',
+        message:
+          'Firestore denied the verified owner account. Deploy the current email-only Firestore Rules to the same Firebase project.',
+        unauthenticated: false,
+      }
+    case 'unauthenticated':
+      return {
+        phase: 'firestore_unavailable',
+        message: 'Firebase could not authorize this history request. Retry the secure connection.',
+        unauthenticated: true,
+      }
+    case 'resource-exhausted':
+      return {
+        phase: 'firestore_unavailable',
+        message: 'Cloud Firestore quota is currently exhausted. Wait before retrying history access.',
+        unauthenticated: false,
+      }
+    case 'failed-precondition':
+      return {
+        phase: 'firestore_unavailable',
+        message:
+          'Cloud Firestore is not configured for this history query. Check the project, database, rules, and indexes.',
+        unauthenticated: false,
+      }
+    case 'deadline-exceeded':
+    case 'unavailable':
+    case 'network-request-failed':
+      return {
+        phase: 'firestore_unavailable',
+        message:
+          'Cloud Firestore could not be reached. Your Firebase sign-in remains active while you retry.',
+        unauthenticated: false,
+      }
+    default:
+      return {
+        phase: 'firestore_unavailable',
+        message: 'Cloud Firestore history access could not be verified. Retry the data connection.',
+        unauthenticated: false,
+      }
+  }
 }
 
 export interface AuthProviderProps {
   children: ReactNode
+  /** Repository boundary used for a minimal server-authorized history read. */
+  verifyAccess?: VerifyFirestoreAccess
 }
 
-export function AuthProvider({ children }: AuthProviderProps) {
+export function AuthProvider({ children, verifyAccess }: AuthProviderProps) {
   const [state, setState] = useState<AuthState>(initialState)
-  const [retryGeneration, setRetryGeneration] = useState(0)
+  const [initializationGeneration, setInitializationGeneration] = useState(0)
   const mountedRef = useRef(false)
-  const firebaseAuthRef = useRef<Auth | null>(null)
-  const authRequiredRef = useRef<boolean | null>(null)
-  const lifecycleGenerationRef = useRef(0)
-  const verificationGenerationRef = useRef(0)
-  const verificationAbortRef = useRef<AbortController | null>(null)
+  const accessGenerationRef = useRef(0)
+  const verifierRef = useRef<VerifyFirestoreAccess>(verifyAccess ?? missingAccessVerifier)
+  const protectedCleanupsRef = useRef(new Set<ProtectedCleanup>())
+  const policyDenialRef = useRef<string | null>(null)
 
-  const getIdToken = useCallback(async (forceRefresh = false): Promise<string | null> => {
-    if (authRequiredRef.current === false) return null
-    const user = firebaseAuthRef.current?.currentUser
-    return user ? user.getIdToken(forceRefresh) : null
-  }, [])
-
-  const invalidateSession = useCallback(async (message?: string): Promise<void> => {
-    verificationGenerationRef.current += 1
-    verificationAbortRef.current?.abort()
-    verificationAbortRef.current = null
-
-    const auth = firebaseAuthRef.current
-    if (mountedRef.current) {
-      setState((current) => ({
-        ...current,
-        phase: authRequiredRef.current === false ? 'error' : 'signed_out',
-        activity: null,
-        session: null,
-        error:
-          message ??
-          (authRequiredRef.current === false
-            ? 'The local development session is no longer available.'
-            : 'Your session has expired. Please sign in again.'),
-      }))
-    }
-
-    if (auth?.currentUser) {
+  const runProtectedCleanups = useCallback((): void => {
+    const cleanups = [...protectedCleanupsRef.current]
+    protectedCleanupsRef.current.clear()
+    for (const cleanup of cleanups) {
       try {
-        await firebaseSignOut(auth)
+        cleanup()
       } catch {
-        // The protected UI is already cleared. A failed remote sign-out must
-        // never keep workstation data mounted in this browser tab.
+        // Cleanup is best-effort, but every remaining callback must still run.
       }
     }
   }, [])
+
+  const registerProtectedCleanup = useCallback((cleanup: ProtectedCleanup): (() => void) => {
+    protectedCleanupsRef.current.add(cleanup)
+    return () => protectedCleanupsRef.current.delete(cleanup)
+  }, [])
+
+  const verifyUserAccess = useCallback(
+    async (firebaseUser: User, allowTokenRefresh = true): Promise<void> => {
+      const generation = ++accessGenerationRef.current
+      const user = safeUser(firebaseUser)
+      let tokenWasRefreshed = false
+      if (mountedRef.current) {
+        setState({
+          phase: 'checking_access',
+          activity: 'checking_access',
+          user,
+          error: null,
+          setupMessage: null,
+          missing: [],
+        })
+      }
+
+      while (true) {
+        try {
+          await verifierRef.current(firebaseUser.uid)
+          if (
+            !mountedRef.current ||
+            generation !== accessGenerationRef.current ||
+            firebaseAuth?.currentUser?.uid !== firebaseUser.uid
+          ) {
+            return
+          }
+          setState({
+            phase: 'authenticated',
+            activity: null,
+            user,
+            error: null,
+            setupMessage: null,
+            missing: [],
+          })
+          return
+        } catch (error) {
+          if (!mountedRef.current || generation !== accessGenerationRef.current) return
+          const failure = normalizeAccessFailure(error)
+
+          if (failure.unauthenticated && allowTokenRefresh && !tokenWasRefreshed) {
+            if (firebaseAuth?.currentUser?.uid !== firebaseUser.uid) {
+              runProtectedCleanups()
+              setState({ ...initialState, phase: 'signed_out', activity: null })
+              return
+            }
+            try {
+              await firebaseUser.getIdToken(true)
+            } catch {
+              // The observer remains authoritative. A present Firebase user is
+              // retained and shown a retryable data-connection state.
+            }
+            if (generation !== accessGenerationRef.current) return
+            tokenWasRefreshed = true
+            continue
+          }
+
+          runProtectedCleanups()
+          setState({
+            phase: failure.phase,
+            activity: null,
+            user,
+            error: failure.message,
+            setupMessage: null,
+            missing: [],
+          })
+          return
+        }
+      }
+    },
+    [runProtectedCleanups],
+  )
+
+  useEffect(() => {
+    verifierRef.current = verifyAccess ?? missingAccessVerifier
+  }, [verifyAccess])
 
   useEffect(() => {
     mountedRef.current = true
@@ -170,373 +275,258 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, [])
 
   useEffect(() => {
-    const lifecycleGeneration = ++lifecycleGenerationRef.current
-    const startupController = new AbortController()
-    let unsubscribe: (() => void) | undefined
+    let disposed = false
+    let unsubscribe: (() => void) | null = null
+    const validation = getFirebaseConfigValidation()
 
-    const isCurrent = () =>
-      mountedRef.current &&
-      lifecycleGeneration === lifecycleGenerationRef.current &&
-      !startupController.signal.aborted
+    accessGenerationRef.current += 1
+    runProtectedCleanups()
+    setState(initialState)
 
-    const verifyUser = async (user: FirebaseAuthUser): Promise<void> => {
-      const verificationGeneration = ++verificationGenerationRef.current
-      verificationAbortRef.current?.abort()
-      const controller = new AbortController()
-      verificationAbortRef.current = controller
-
-      if (isCurrent()) {
-        setState((current) => ({
-          ...current,
-          phase: current.phase === 'submitting' ? 'submitting' : 'initializing',
-          activity: 'verifying',
-          session: null,
-          error: null,
-        }))
-      }
-
-      try {
-        const token = await user.getIdToken(true)
-        if (!isCurrent() || verificationGeneration !== verificationGenerationRef.current) return
-
-        const session = await apiClient!.getSession({
-          token,
-          protected: true,
-          signal: controller.signal,
-        })
-        if (!isCurrent() || verificationGeneration !== verificationGenerationRef.current) return
-
-        setState((current) => ({
-          ...current,
-          phase: 'authenticated',
-          activity: null,
-          session,
-          error: null,
-        }))
-      } catch (error) {
-        if (
-          isAbortError(error) ||
-          !isCurrent() ||
-          verificationGeneration !== verificationGenerationRef.current
-        ) {
-          return
-        }
-
-        const status = statusOf(error)
-        if (status === 403) {
-          setState((current) => ({
-            ...current,
-            phase: 'forbidden',
-            activity: null,
-            session: null,
-            error: 'This account is not authorized to access the workstation.',
-          }))
-          return
-        }
-        if (status === 401) {
-          await invalidateSession('Your session has expired. Please sign in again.')
-          return
-        }
-        setState((current) => ({
-          ...current,
-          phase: 'error',
-          activity: null,
-          session: null,
-          error: authenticationErrorMessage(error, 'The secure session could not be verified.'),
-        }))
-      }
+    if (!validation.ok) {
+      setState({
+        phase: 'setup_required',
+        activity: null,
+        user: null,
+        error: null,
+        setupMessage: validation.message,
+        missing: [...validation.missing, ...validation.invalid],
+      })
+      return undefined
     }
 
-    const initialize = async (): Promise<void> => {
-      verificationGenerationRef.current += 1
-      verificationAbortRef.current?.abort()
-      verificationAbortRef.current = null
-      firebaseAuthRef.current = null
-      authRequiredRef.current = null
-      setState(initialState)
+    if (firebaseClientInitializationError || !firebaseAuth) {
+      setState({
+        phase: 'setup_required',
+        activity: null,
+        user: null,
+        error: null,
+        setupMessage:
+          firebaseClientInitializationError ??
+          'Firebase Authentication could not be initialized from the Web configuration.',
+        missing: [],
+      })
+      return undefined
+    }
+    const auth = firebaseAuth
 
-      if (!apiClient) {
-        if (!isCurrent()) return
-        setState({
-          ...initialState,
-          phase: 'setup_required',
-          activity: null,
-          setupMessage: apiUrl.message,
-          missing: ['VITE_TRADINGAGENTS_API_URL'],
-        })
-        return
-      }
-
-      apiClient.setAuthTokenProvider(getIdToken)
-      apiClient.setUnauthorizedHandler(() => invalidateSession())
-      apiClient.setForbiddenHandler(() => {
-        if (!mountedRef.current) return
-        verificationGenerationRef.current += 1
-        verificationAbortRef.current?.abort()
-        verificationAbortRef.current = null
-        setState((current) => ({
-          ...current,
-          phase: 'forbidden',
-          activity: null,
-          session: null,
-          error: 'This account is not authorized to access the workstation.',
-        }))
+    const rejectDisallowedIdentity = (): void => {
+      const generation = ++accessGenerationRef.current
+      runProtectedCleanups()
+      policyDenialRef.current = TRADING_APP_ACCESS_DENIED_MESSAGE
+      setState({
+        ...initialState,
+        phase: 'submitting',
+        activity: 'signing_out',
+        error: TRADING_APP_ACCESS_DENIED_MESSAGE,
       })
 
-      try {
-        const config = await apiClient.getAuthConfig(startupController.signal)
-        if (!isCurrent()) return
-        authRequiredRef.current = config.required
-
-        if (!config.required) {
+      void firebaseSignOut(auth)
+        .catch(() => undefined)
+        .finally(() => {
+          if (
+            !mountedRef.current ||
+            generation !== accessGenerationRef.current ||
+            policyDenialRef.current !== TRADING_APP_ACCESS_DENIED_MESSAGE
+          ) return
           setState({
-            phase: 'initializing',
-            activity: 'verifying',
-            config,
-            session: null,
-            error: null,
-            setupMessage: null,
-            missing: [],
-          })
-          const session = await apiClient.getSession({
-            signal: startupController.signal,
-            token: null,
-            protected: false,
-          })
-          if (!isCurrent()) return
-          setState({
-            phase: 'authenticated',
+            ...initialState,
+            phase: 'signed_out',
             activity: null,
-            config,
-            session,
-            error: null,
-            setupMessage: null,
-            missing: [],
+            error: TRADING_APP_ACCESS_DENIED_MESSAGE,
           })
-          return
-        }
-
-        if (!config.configured) {
-          setState({
-            phase: 'setup_required',
-            activity: null,
-            config,
-            session: null,
-            error: null,
-            setupMessage:
-              'Firebase Authentication must be configured on the backend before this workstation can accept sign-ins.',
-            missing: safeMissingNames(config.missing),
-          })
-          return
-        }
-
-        if (!isFirebaseWebConfig(config.firebase)) {
-          setState({
-            phase: 'setup_required',
-            activity: null,
-            config,
-            session: null,
-            error: null,
-            setupMessage:
-              'The backend returned an incomplete Firebase Web configuration.',
-            missing: ['FIREBASE_WEB_CONFIGURATION'],
-          })
-          return
-        }
-
-        setState({
-          phase: 'initializing',
-          activity: 'initializing',
-          config,
-          session: null,
-          error: null,
-          setupMessage: null,
-          missing: [],
         })
+    }
 
-        const auth = await initializeFirebaseAuth(config.firebase)
-        if (!isCurrent()) return
-        firebaseAuthRef.current = auth
-        apiClient.setAuthTokenProvider(async () => {
-          const currentUser = auth.currentUser
-          return currentUser ? currentUser.getIdToken(false) : null
-        })
-
+    void ensureFirebaseAuthPersistence()
+      .then(() => {
+        if (disposed || !mountedRef.current) return
         unsubscribe = onAuthStateChanged(
           auth,
-          (user) => {
-            if (!isCurrent()) return
-            if (!user) {
-              verificationGenerationRef.current += 1
-              verificationAbortRef.current?.abort()
-              verificationAbortRef.current = null
-              setState((current) => ({
-                ...current,
+          (firebaseUser) => {
+            if (disposed || !mountedRef.current) return
+            accessGenerationRef.current += 1
+            runProtectedCleanups()
+            if (!firebaseUser) {
+              const policyError = policyDenialRef.current
+              policyDenialRef.current = null
+              setState({
+                ...initialState,
                 phase: 'signed_out',
                 activity: null,
-                session: null,
-              }))
+                error: policyError,
+              })
               return
             }
-            void verifyUser(user)
+            if (!isAllowedFirebaseIdentity(firebaseUser)) {
+              rejectDisallowedIdentity()
+              return
+            }
+            policyDenialRef.current = null
+            void verifyUserAccess(firebaseUser)
           },
           (error) => {
-            if (!isCurrent()) return
-            setState((current) => ({
-              ...current,
+            if (disposed || !mountedRef.current) return
+            accessGenerationRef.current += 1
+            runProtectedCleanups()
+            setState({
+              ...initialState,
               phase: 'error',
               activity: null,
-              session: null,
               error: friendlyFirebaseError(error),
-            }))
+            })
           },
         )
-      } catch (error) {
-        if (isAbortError(error) || !isCurrent()) return
-        const status = statusOf(error)
-        setState((current) => ({
-          ...current,
-          phase: status === 403 ? 'forbidden' : 'error',
+      })
+      .catch((error: unknown) => {
+        if (disposed || !mountedRef.current) return
+        setState({
+          ...initialState,
+          phase: 'error',
           activity: null,
-          session: null,
-          error:
-            status === 403
-              ? 'This account is not authorized to access the workstation.'
-              : authenticationErrorMessage(error, 'Authentication could not be initialized.'),
-        }))
-      }
-    }
-
-    void initialize()
+          error: friendlyFirebaseError(error),
+        })
+      })
 
     return () => {
-      startupController.abort()
+      disposed = true
+      accessGenerationRef.current += 1
+      policyDenialRef.current = null
       unsubscribe?.()
-      verificationGenerationRef.current += 1
-      verificationAbortRef.current?.abort()
-      verificationAbortRef.current = null
-      if (apiClient) {
-        apiClient.setUnauthorizedHandler(null)
-        apiClient.setForbiddenHandler(null)
-        apiClient.setAuthTokenProvider(null)
-      }
+      runProtectedCleanups()
     }
-  }, [getIdToken, invalidateSession, retryGeneration])
+  }, [initializationGeneration, runProtectedCleanups, verifyUserAccess])
 
   const loginWithGoogle = useCallback(async (): Promise<void> => {
-    const auth = firebaseAuthRef.current
-    if (!auth || !mountedRef.current) {
-      setState((current) => ({
-        ...current,
-        error: 'Authentication is still initializing. Please wait and try again.',
-      }))
-      return
-    }
+    if (!firebaseAuth || !mountedRef.current) return
+    policyDenialRef.current = null
     setState((current) => ({
       ...current,
       phase: 'submitting',
       activity: 'signing_in',
-      session: null,
+      user: null,
       error: null,
     }))
     try {
-      await signInWithGoogle(auth)
+      await signInWithGoogle(firebaseAuth)
     } catch (error) {
-      if (!mountedRef.current || auth !== firebaseAuthRef.current) return
-      setState((current) => ({
-        ...current,
+      if (!mountedRef.current) return
+      setState({
+        ...initialState,
         phase: 'signed_out',
         activity: null,
-        session: null,
         error: friendlyFirebaseError(error),
-      }))
+      })
     }
   }, [])
 
   const loginWithEmail = useCallback(async (email: string, password: string): Promise<void> => {
-    const auth = firebaseAuthRef.current
-    if (!auth || !mountedRef.current) {
-      setState((current) => ({
-        ...current,
-        error: 'Authentication is still initializing. Please wait and try again.',
-      }))
+    if (!firebaseAuth || !mountedRef.current) return
+    if (!isAllowedLoginEmail(email)) {
+      setState({
+        ...initialState,
+        phase: 'signed_out',
+        activity: null,
+        error: TRADING_APP_ACCESS_DENIED_MESSAGE,
+      })
       return
     }
+    policyDenialRef.current = null
     setState((current) => ({
       ...current,
       phase: 'submitting',
       activity: 'signing_in',
-      session: null,
+      user: null,
       error: null,
     }))
     try {
-      await signInWithEmail(auth, email.trim(), password)
+      await signInWithEmail(firebaseAuth, email.trim(), password)
     } catch (error) {
-      if (!mountedRef.current || auth !== firebaseAuthRef.current) return
-      setState((current) => ({
-        ...current,
+      if (!mountedRef.current) return
+      setState({
+        ...initialState,
         phase: 'signed_out',
         activity: null,
-        session: null,
         error: friendlyFirebaseError(error),
-      }))
+      })
     }
   }, [])
 
   const logout = useCallback(async (): Promise<void> => {
-    const auth = firebaseAuthRef.current
-    if (!auth || authRequiredRef.current === false) return
-
-    verificationGenerationRef.current += 1
-    verificationAbortRef.current?.abort()
-    verificationAbortRef.current = null
+    if (!firebaseAuth) return
+    accessGenerationRef.current += 1
+    runProtectedCleanups()
     setState((current) => ({
       ...current,
       phase: 'submitting',
       activity: 'signing_out',
-      session: null,
       error: null,
     }))
     try {
-      await firebaseSignOut(auth)
+      await firebaseSignOut(firebaseAuth)
       if (!mountedRef.current) return
-      setState((current) => ({
-        ...current,
-        phase: 'signed_out',
-        activity: null,
-        session: null,
-        error: null,
-      }))
+      setState({ ...initialState, phase: 'signed_out', activity: null })
     } catch (error) {
       if (!mountedRef.current) return
-      setState((current) => ({
-        ...current,
+      setState({
+        ...initialState,
         phase: 'signed_out',
         activity: null,
-        session: null,
         error: friendlyFirebaseError(error),
-      }))
+      })
     }
+  }, [runProtectedCleanups])
+
+  const getIdToken = useCallback(async (forceRefresh = false): Promise<string | null> => {
+    const currentUser = firebaseAuth?.currentUser
+    return currentUser && isAllowedFirebaseIdentity(currentUser)
+      ? currentUser.getIdToken(forceRefresh)
+      : null
   }, [])
 
-  const retry = useCallback(() => {
-    setRetryGeneration((generation) => generation + 1)
-  }, [])
+  const retry = useCallback((): void => {
+    const currentUser = firebaseAuth?.currentUser
+    if (currentUser && state.phase === 'firestore_unavailable') {
+      void verifyUserAccess(currentUser)
+      return
+    }
+    setInitializationGeneration((generation) => generation + 1)
+  }, [state.phase, verifyUserAccess])
+
+  const revalidateFirestoreAccess = useCallback((): void => {
+    const currentUser = firebaseAuth?.currentUser
+    if (!currentUser) {
+      accessGenerationRef.current += 1
+      runProtectedCleanups()
+      setState({ ...initialState, phase: 'signed_out', activity: null })
+      return
+    }
+    void verifyUserAccess(currentUser)
+  }, [runProtectedCleanups, verifyUserAccess])
 
   const value = useMemo<AuthContextValue>(
     () => ({
       ...state,
-      user: state.session?.user ?? null,
-      authRequired: state.config?.required ?? null,
-      canLogout: state.config?.required === true && firebaseAuthRef.current !== null,
+      authRequired: true,
+      canLogout: state.user !== null,
       loginWithGoogle,
       loginWithEmail,
       logout,
       getIdToken,
-      invalidateSession,
       retry,
+      revalidateFirestoreAccess,
+      registerProtectedCleanup,
     }),
-    [getIdToken, invalidateSession, loginWithEmail, loginWithGoogle, logout, retry, state],
+    [
+      getIdToken,
+      loginWithEmail,
+      loginWithGoogle,
+      logout,
+      registerProtectedCleanup,
+      retry,
+      revalidateFirestoreAccess,
+      state,
+    ],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

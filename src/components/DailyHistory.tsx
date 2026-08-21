@@ -58,7 +58,9 @@ export function DailyHistory({
       </div>
       <div className="history-summary">
         <strong>{history.count.toString().padStart(2, '0')} RUNS</strong>
-        <span>{formatLocalDate(history.date).toUpperCase()}</span>
+        <span>
+          {formatLocalDate(history.date).toUpperCase()} · {history.source === 'server' ? 'FIREBASE LIVE' : history.source.toUpperCase()}
+        </span>
       </div>
       {history.error && <div className="history-error" role="alert">{history.error}</div>}
       {history.loading ? (

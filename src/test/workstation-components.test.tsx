@@ -1,15 +1,30 @@
 import { act, fireEvent, render, renderHook, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
+import { firestoreStorage } from '../app/App'
 import { DailyHistory } from '../components/DailyHistory'
 import { FinalDecision } from '../components/FinalDecision'
 import { IntelligenceDesk } from '../components/IntelligenceDesk'
 import { Reports } from '../components/Reports'
+import { TerminalHeader } from '../components/TerminalHeader'
 import { TEXT_SCALE_STORAGE_KEY, useTextScale } from '../hooks/useTextScale'
 import type { HistoryState } from '../hooks/useHistory'
 import { activeRunFixture, completedRunFixture } from './fixtures'
 
 describe('workstation interaction components', () => {
+  it('marks the data store disconnected when backend writes fall away mid-run', () => {
+    const storage = firestoreStorage('server', 'server', true)
+    render(
+      <TerminalHeader
+        sessionStatus="HISTORY ONLY"
+        storage={storage}
+        onLogout={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('DISCONNECTED')).toBeVisible()
+    expect(screen.queryByText('FIREBASE LIVE')).not.toBeInTheDocument()
+  })
+
   it('supports F1/F2/F3 and roving Arrow/Home/End tab keyboard behavior', async () => {
     render(<IntelligenceDesk run={completedRunFixture} onCopy={vi.fn()} />)
     const live = screen.getByRole('tab', { name: /Live Wire/ })
@@ -67,10 +82,12 @@ describe('workstation interaction components', () => {
       count: 2,
       loading: false,
       error: null,
+      source: 'server',
       setDate: vi.fn(),
       moveDay: vi.fn(),
       today: vi.fn(),
       refresh: vi.fn(),
+      clear: vi.fn(),
     }
     render(
       <DailyHistory

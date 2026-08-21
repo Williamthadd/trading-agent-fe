@@ -1,5 +1,6 @@
 import { useId, useState, type FormEvent, type ReactNode } from 'react'
 
+import { TRADING_APP_ALLOWED_EMAIL } from './accessPolicy'
 import { useAuth } from './AuthProvider'
 import '../styles/auth.css'
 
@@ -76,8 +77,8 @@ function authStatusText(activity: ReturnType<typeof useAuth>['activity']): strin
       return 'AUTHENTICATING CREDENTIALS'
     case 'signing_out':
       return 'ENDING SECURE SESSION'
-    case 'verifying':
-      return 'VERIFYING BACKEND SESSION'
+    case 'checking_access':
+      return 'VERIFYING FIRESTORE ACCESS'
     default:
       return 'INITIALIZING FIREBASE AUTH'
   }
@@ -133,40 +134,94 @@ export function LoginPage() {
         {auth.phase === 'setup_required' ? (
           <StatePanel
             code="CONFIG // 00"
-            heading="SETUP REQUIRED"
-            message={auth.setupMessage ?? 'Authentication configuration is incomplete.'}
+            heading="FIREBASE SETUP REQUIRED"
+            message={auth.setupMessage ?? 'Firebase Web configuration is incomplete.'}
             actionLabel="RECHECK CONFIGURATION"
             onAction={auth.retry}
           >
-            <div className="auth-missing" aria-label="Missing server environment variables">
-              <span className="auth-missing-label">MISSING SERVER VARIABLES</span>
-              <ul>
-                {auth.missing.map((name) => (
-                  <li key={name}>
-                    <code>{name}</code>
-                  </li>
-                ))}
-              </ul>
-            </div>
+            {auth.missing.length > 0 ? (
+              <div className="auth-missing" aria-label="Firebase configuration variables requiring attention">
+                <span className="auth-missing-label">FRONTEND VARIABLES REQUIRING ATTENTION</span>
+                <ul>
+                  {auth.missing.map((name) => (
+                    <li key={name}>
+                      <code>{name}</code>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </StatePanel>
-        ) : auth.phase === 'forbidden' ? (
+        ) : auth.phase === 'checking_access' ? (
+          <StatePanel
+            code="DATA // CHECK"
+            heading="CHECKING FIRESTORE ACCESS"
+            message="Firebase sign-in succeeded. Verifying read access to the shared TradingAgents history workspace."
+            actionLabel="LOGOUT"
+            onAction={() => void auth.logout()}
+          />
+        ) : auth.phase === 'permission_denied' ? (
           <StatePanel
             code="ACCESS // 03"
-            heading="ACCOUNT NOT AUTHORIZED"
-            message="Your identity was verified, but this account does not have workstation access. Contact the Firebase administrator."
-            actionLabel="RETURN TO LOGIN"
-            onAction={() => void auth.logout()}
+            heading="FIRESTORE ACCESS DENIED"
+            message="Your Firebase identity matches the approved owner email, but the deployed Firestore Rules denied the history read. Deploy the current rules to the same Firebase project, then retry."
           >
             <div className="auth-alert" role="alert" aria-live="assertive">
               {visibleError}
+            </div>
+            <div className="auth-form">
+              <button
+                className="auth-command-button auth-command-button--compact"
+                type="button"
+                onClick={auth.revalidateFirestoreAccess}
+              >
+                <span>RETRY ACCESS</span>
+                <span aria-hidden="true">&#8594;</span>
+              </button>
+              <button
+                className="auth-command-button auth-command-button--compact"
+                type="button"
+                onClick={() => void auth.logout()}
+              >
+                <span>LOGOUT</span>
+                <span aria-hidden="true">&#8594;</span>
+              </button>
+            </div>
+          </StatePanel>
+        ) : auth.phase === 'firestore_unavailable' ? (
+          <StatePanel
+            code="DATA // OFFLINE"
+            heading="FIRESTORE UNAVAILABLE"
+            message="Your Firebase sign-in remains active, but history data cannot be reached. FastAPI status does not affect this connection."
+          >
+            <div className="auth-alert" role="alert" aria-live="assertive">
+              {visibleError}
+            </div>
+            <div className="auth-form">
+              <button
+                className="auth-command-button auth-command-button--compact"
+                type="button"
+                onClick={auth.retry}
+              >
+                <span>RETRY FIRESTORE</span>
+                <span aria-hidden="true">&#8594;</span>
+              </button>
+              <button
+                className="auth-command-button auth-command-button--compact"
+                type="button"
+                onClick={() => void auth.logout()}
+              >
+                <span>LOGOUT</span>
+                <span aria-hidden="true">&#8594;</span>
+              </button>
             </div>
           </StatePanel>
         ) : auth.phase === 'error' ? (
           <StatePanel
             code="SYSTEM // ERR"
-            heading="AUTH SERVICE OFFLINE"
-            message="The secure session could not be established. Confirm the backend is running and retry the connection."
-            actionLabel="RETRY CONNECTION"
+            heading="FIREBASE AUTH UNAVAILABLE"
+            message="Firebase Authentication could not be initialized. The TradingAgents API is not involved in login."
+            actionLabel="RETRY FIREBASE"
             onAction={auth.retry}
           >
             <div className="auth-alert" role="alert" aria-live="assertive">
@@ -178,7 +233,7 @@ export function LoginPage() {
             <div className="auth-panel-code">ACCESS // 01</div>
             <h1 id="auth-heading">Sign in to workstation</h1>
             <p className="auth-supporting-copy">
-              Authentication is required before market analysis and Firestore history can be accessed.
+              Access is restricted to the verified owner account {TRADING_APP_ALLOWED_EMAIL}.
             </p>
 
             <button

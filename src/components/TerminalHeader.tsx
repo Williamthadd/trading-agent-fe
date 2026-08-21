@@ -12,10 +12,12 @@ export type TerminalSessionStatus =
   | "ready"
   | "running"
   | "offline"
+  | "history only"
   | "INITIALIZING"
   | "READY"
   | "RUNNING"
-  | "OFFLINE";
+  | "OFFLINE"
+  | "HISTORY ONLY";
 
 export interface TerminalStorageStatus {
   mode: "firebase" | "local" | "unavailable" | string;
@@ -34,8 +36,6 @@ export interface TerminalHeaderProps {
   workstationId?: string;
   logoSrc?: string;
   workspaceTargetId?: string;
-  /** Optional deterministic override. When omitted, browser online events win. */
-  online?: boolean;
   className?: string;
 }
 
@@ -48,18 +48,22 @@ function presentStorage(storage: TerminalStorageStatus): StoragePresentation {
   const mode = storage.mode.toLowerCase();
 
   if (mode === "firebase" && storage.configured !== false) {
-    return { label: "FIREBASE", state: "online" };
+    return { label: "FIREBASE LIVE", state: "online" };
   }
 
-  if (mode === "local") {
-    return { label: "LOCAL", state: "local" };
+  if (mode === "cache") {
+    return { label: "FIREBASE CACHE", state: "local" };
+  }
+
+  if (mode === "checking") {
+    return { label: "CHECKING", state: "local" };
+  }
+
+  if (mode === "disconnected") {
+    return { label: "DISCONNECTED", state: "error" };
   }
 
   return { label: "UNAVAILABLE", state: "error" };
-}
-
-function browserIsOnline(): boolean {
-  return typeof navigator === "undefined" ? true : navigator.onLine;
 }
 
 export function TerminalHeader({
@@ -72,11 +76,9 @@ export function TerminalHeader({
   workstationId = "WEB-01",
   logoSrc = "/logo.png",
   workspaceTargetId = "workspace",
-  online,
   className,
 }: TerminalHeaderProps) {
   const [now, setNow] = useState(() => new Date());
-  const [detectedOnline, setDetectedOnline] = useState(browserIsOnline);
   const textScale = useTextScale();
 
   useEffect(() => {
@@ -95,22 +97,6 @@ export function TerminalHeader({
       }
     };
   }, []);
-
-  useEffect(() => {
-    if (online !== undefined) {
-      return undefined;
-    }
-
-    const markOnline = () => setDetectedOnline(true);
-    const markOffline = () => setDetectedOnline(false);
-    window.addEventListener("online", markOnline);
-    window.addEventListener("offline", markOffline);
-
-    return () => {
-      window.removeEventListener("online", markOnline);
-      window.removeEventListener("offline", markOffline);
-    };
-  }, [online]);
 
   const clock = useMemo(() => {
     const date = new Intl.DateTimeFormat(undefined, {
@@ -134,15 +120,12 @@ export function TerminalHeader({
     return { date, time, zone };
   }, [now]);
 
-  const effectiveOnline = online ?? detectedOnline;
-  const normalizedSession = effectiveOnline
-    ? sessionStatus.toLowerCase()
-    : "offline";
+  const normalizedSession = sessionStatus.toLowerCase();
   const sessionLabel = normalizedSession.toUpperCase();
   const sessionState =
     normalizedSession === "offline"
       ? "error"
-      : normalizedSession === "initializing"
+      : normalizedSession === "initializing" || normalizedSession === "history only"
         ? "local"
         : "online";
   const storageView = presentStorage(storage);
@@ -221,7 +204,7 @@ export function TerminalHeader({
             <span className="system-cell__label">SIGNED IN</span>
             <div className="account-line">
               <span className="account-line__email" title={accountEmail ?? undefined}>
-                {accountEmail || "LOCAL SESSION"}
+                {accountEmail || "FIREBASE USER"}
               </span>
               {canLogout ? (
                 <button

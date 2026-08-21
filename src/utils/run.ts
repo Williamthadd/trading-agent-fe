@@ -1,6 +1,5 @@
 import type { RunEvent, TradingRun } from '../api/types'
 
-const TERMINAL = new Set(['completed', 'failed', 'error', 'cancelled', 'canceled'])
 const ACTIVE = new Set(['queued', 'pending', 'running', 'processing', 'in_progress'])
 const COMPLETE = new Set(['completed', 'complete', 'done', 'success', 'succeeded'])
 const FAILED = new Set(['failed', 'failure', 'error', 'errored'])
@@ -9,7 +8,8 @@ const CANCELLED = new Set(['cancelled', 'canceled'])
 export type NormalizedStatus = 'active' | 'completed' | 'failed' | 'cancelled' | 'unknown'
 
 export function isTerminalStatus(status: string | undefined): boolean {
-  return TERMINAL.has((status ?? '').toLowerCase())
+  const normalized = (status ?? '').toLowerCase()
+  return COMPLETE.has(normalized) || FAILED.has(normalized) || CANCELLED.has(normalized)
 }
 
 export function normalizeStatus(status: string | undefined): NormalizedStatus {
@@ -82,7 +82,7 @@ export function normalizeEvents(run: TradingRun | null): NormalizedEvent[] {
           agent: 'SYSTEM',
           message: entry,
           status: null,
-          sequence: index,
+          sequence: Number.POSITIVE_INFINITY,
         }
       }
       const message = entry.message ?? entry.content ?? entry.data ?? entry.type ?? ''
@@ -102,7 +102,10 @@ export function normalizeEvents(run: TradingRun | null): NormalizedEvent[] {
               : 'SYSTEM',
         message: safeText(message, 20_000) || 'Event received',
         status: typeof entry.status === 'string' ? entry.status : null,
-        sequence: typeof entry.sequence === 'number' ? entry.sequence : index,
+        sequence:
+          typeof entry.sequence === 'number' && Number.isFinite(entry.sequence)
+            ? entry.sequence
+            : Number.POSITIVE_INFINITY,
       }
     })
     .sort((a, b) => a.sequence - b.sequence)
@@ -226,7 +229,9 @@ function decisionCandidates(run: TradingRun): unknown[] {
   const reports = isRecord(run.reports) ? run.reports : {}
   const result = isRecord(run.result) ? run.result : {}
   const finalState = isRecord(run.final_state) ? run.final_state : {}
-  const risk = isRecord(finalState.risk_debate_state) ? finalState.risk_debate_state : {}
+  const runRisk = isRecord(run.risk_debate_state) ? run.risk_debate_state : {}
+  const resultRisk = isRecord(result.risk_debate_state) ? result.risk_debate_state : {}
+  const finalRisk = isRecord(finalState.risk_debate_state) ? finalState.risk_debate_state : {}
   return [
     reports.final_trade_decision,
     run.final_trade_decision,
@@ -236,7 +241,9 @@ function decisionCandidates(run: TradingRun): unknown[] {
     run.decision,
     result.final_decision,
     result.decision,
-    risk.judge_decision,
+    finalRisk.judge_decision,
+    resultRisk.judge_decision,
+    runRisk.judge_decision,
   ]
 }
 
@@ -252,6 +259,7 @@ export function extractDecision(run: TradingRun | null): ExtractedDecision | nul
   const signal =
     (shortCandidate ? findString(shortCandidate, SIGNAL_KEYS) : '') ||
     (structured ? findString(structured, SIGNAL_KEYS) : '') ||
+    (typeof run.final_decision === 'string' && run.final_decision.length < 80 ? run.final_decision : '') ||
     (typeof run.decision === 'string' && run.decision.length < 80 ? run.decision : '') ||
     'REVIEW'
 
@@ -288,6 +296,29 @@ export function extractDecision(run: TradingRun | null): ExtractedDecision | nul
 
 export function rawRunSignature(run: TradingRun | null, key: 'reports' | 'decision'): string {
   if (!run) return 'standby'
-  const payload = key === 'reports' ? extractReports(run) : extractDecision(run)
-  return `${run.run_id}:${safeText(payload, 250_000)}`
+  const parts: string[] = []
+  if (key === 'reports') {
+    for (const report of extractReports(run)) parts.push(report.label, report.content)
+  } else {
+    const decision = extractDecision(run)
+    if (decision) {
+      parts.push(decision.signal, decision.narrative, decision.raw)
+      for (const [label, value] of decision.fields) parts.push(label, value)
+    }
+  }
+
+  let hashA = 0x811c9dc5
+  let hashB = 0x9e3779b9
+  let totalLength = 0
+  for (const part of parts) {
+    totalLength += part.length
+    hashA = Math.imul(hashA ^ part.length, 0x01000193)
+    hashB = Math.imul(hashB ^ part.length, 0x85ebca6b)
+    for (let index = 0; index < part.length; index += 1) {
+      const code = part.charCodeAt(index)
+      hashA = Math.imul(hashA ^ code, 0x01000193)
+      hashB = Math.imul(hashB ^ code, 0xc2b2ae35)
+    }
+  }
+  return `${run.run_id}:${key}:${parts.length}:${totalLength}:${(hashA >>> 0).toString(16)}:${(hashB >>> 0).toString(16)}`
 }

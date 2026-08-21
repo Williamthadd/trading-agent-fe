@@ -6,5 +6,8 @@ export {
   type AuthContextValue,
   type AuthPhase,
   type AuthProviderProps,
+  type AuthUser,
+  type ProtectedCleanup,
+  type VerifyFirestoreAccess,
 } from './AuthProvider'
 export { LoginPage } from './LoginPage'

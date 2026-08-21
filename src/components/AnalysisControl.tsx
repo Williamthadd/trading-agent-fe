@@ -31,6 +31,7 @@ export interface AnalysisControlProps {
   disabled?: boolean
   submitting?: boolean
   active?: boolean
+  persistPreferences?: boolean
   apiError?: string | null
   onSubmit: (request: RunRequest) => void | Promise<void>
   onClearApiError?: () => void
@@ -108,6 +109,7 @@ export function AnalysisControl({
   disabled = false,
   submitting = false,
   active = false,
+  persistPreferences = true,
   apiError,
   onSubmit,
   onClearApiError,
@@ -127,8 +129,9 @@ export function AnalysisControl({
   const deepOption = provider?.deep_models.find((item) => item.id === state.deepModel)
 
   useEffect(() => {
+    if (!persistPreferences) return
     persist(toPersisted(state))
-  }, [persist, state])
+  }, [persist, persistPreferences, state])
 
   useEffect(() => {
     const fundamentalsId = fundamentals?.id
@@ -370,6 +373,7 @@ export function AnalysisControl({
           <span>Provider</span>
           <select
             value={state.provider}
+            disabled={disabled}
             onChange={(event) => switchProvider(event.target.value)}
             aria-invalid={Boolean(errors.provider)}
           >
@@ -382,7 +386,7 @@ export function AnalysisControl({
         <div className="form-grid model-routing-grid">
           <label className="field">
             <span>Quick Model</span>
-            <select value={state.quickModel} onChange={(event) => update('quickModel', event.target.value)}>
+            <select disabled={disabled} value={state.quickModel} onChange={(event) => update('quickModel', event.target.value)}>
               {provider?.quick_models.map((item) => (
                 <option key={item.id} value={item.id}>{item.label}</option>
               ))}
@@ -390,7 +394,7 @@ export function AnalysisControl({
           </label>
           <label className="field">
             <span>Deep Model</span>
-            <select value={state.deepModel} onChange={(event) => update('deepModel', event.target.value)}>
+            <select disabled={disabled} value={state.deepModel} onChange={(event) => update('deepModel', event.target.value)}>
               {provider?.deep_models.map((item) => (
                 <option key={item.id} value={item.id}>{item.label}</option>
               ))}
@@ -403,6 +407,7 @@ export function AnalysisControl({
             <input
               id={`${formId}-custom-quick`}
               value={state.customQuickModel}
+              disabled={disabled}
               maxLength={160}
               onChange={(event) => update('customQuickModel', event.target.value)}
               aria-invalid={Boolean(errors.quickModel)}
@@ -417,6 +422,7 @@ export function AnalysisControl({
             <input
               id={`${formId}-custom-deep`}
               value={state.customDeepModel}
+              disabled={disabled}
               maxLength={160}
               onChange={(event) => update('customDeepModel', event.target.value)}
               aria-invalid={Boolean(errors.deepModel)}
@@ -434,6 +440,7 @@ export function AnalysisControl({
               id={`${formId}-backend-url`}
               type="url"
               value={state.backendUrl}
+              disabled={disabled}
               list={`${formId}-backend-urls`}
               placeholder="http://127.0.0.1:11434"
               onChange={(event) => update('backendUrl', event.target.value)}
@@ -451,7 +458,7 @@ export function AnalysisControl({
         {provider?.thinking_control && (
           <label className="field">
             <span>{provider.thinking_control.label}</span>
-            <select value={state.thinkingValue} onChange={(event) => update('thinkingValue', event.target.value)}>
+            <select disabled={disabled} value={state.thinkingValue} onChange={(event) => update('thinkingValue', event.target.value)}>
               {provider.thinking_control.options.map((item) => (
                 <option key={item.id} value={item.id}>{item.label}</option>
               ))}

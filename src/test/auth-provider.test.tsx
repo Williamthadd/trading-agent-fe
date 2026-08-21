@@ -1,10 +1,14 @@
+import { useEffect } from 'react'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { AuthConfigResponse, SessionResponse } from '../api/types'
-
 interface FakeFirebaseUser {
+  uid: string
+  email: string | null
+  displayName: string | null
+  photoURL: string | null
+  emailVerified: boolean
   getIdToken: ReturnType<typeof vi.fn>
 }
 
@@ -12,30 +16,25 @@ type AuthObserver = (user: FakeFirebaseUser | null) => void
 type AuthErrorObserver = (error: unknown) => void
 
 const mocks = vi.hoisted(() => ({
-  apiClient: {
-    getAuthConfig: vi.fn(),
-    getSession: vi.fn(),
-    setAuthTokenProvider: vi.fn(),
-    setUnauthorizedHandler: vi.fn(),
-    setForbiddenHandler: vi.fn(),
-  },
   fakeAuth: { currentUser: null as FakeFirebaseUser | null },
   authObserver: null as AuthObserver | null,
   authErrorObserver: null as AuthErrorObserver | null,
   unsubscribe: vi.fn(),
-  initializeFirebaseAuth: vi.fn(),
+  getValidation: vi.fn(),
+  ensurePersistence: vi.fn(),
   signInWithEmail: vi.fn(),
   signInWithGoogle: vi.fn(),
   firebaseSignOut: vi.fn(),
 }))
 
-vi.mock('../api/client', () => ({
-  apiClient: mocks.apiClient,
-  apiUrl: { ok: true, value: 'http://127.0.0.1:8000', message: null },
+vi.mock('../firebase/client', () => ({
+  firebaseAuth: mocks.fakeAuth,
+  firebaseClientInitializationError: null,
+  getFirebaseConfigValidation: mocks.getValidation,
+  ensureFirebaseAuthPersistence: mocks.ensurePersistence,
 }))
 
 vi.mock('../auth/firebase', () => ({
-  initializeFirebaseAuth: mocks.initializeFirebaseAuth,
   signInWithEmail: mocks.signInWithEmail,
   signInWithGoogle: mocks.signInWithGoogle,
   friendlyFirebaseError: (error: unknown) => {
@@ -45,7 +44,7 @@ vi.mock('../auth/firebase', () => ({
         : ''
     return code === 'auth/popup-blocked'
       ? 'The sign-in popup was blocked. Allow popups for this site and try again.'
-      : 'Email or password is incorrect.'
+      : 'Authentication could not be completed. Please try again.'
   },
 }))
 
@@ -63,63 +62,76 @@ vi.mock('firebase/auth', () => ({
 }))
 
 import { AuthBoundary } from '../auth/AuthBoundary'
-import { AuthProvider, useAuth } from '../auth/AuthProvider'
+import {
+  AuthProvider,
+  useAuth,
+  type ProtectedCleanup,
+  type VerifyFirestoreAccess,
+} from '../auth/AuthProvider'
+import {
+  TRADING_APP_ACCESS_DENIED_MESSAGE,
+  TRADING_APP_ALLOWED_EMAIL,
+} from '../auth/accessPolicy'
 
-const configuredAuth: AuthConfigResponse = {
-  required: true,
-  configured: true,
-  firebase: {
-    apiKey: 'public-browser-key',
-    authDomain: 'example.firebaseapp.com',
-    projectId: 'tradingagents-test',
-    appId: '1:123:web:abc',
+const validConfiguration = {
+  ok: true,
+  config: {
+    options: {
+      apiKey: 'public-browser-key',
+      authDomain: 'example.firebaseapp.com',
+      projectId: 'tradingagents-test',
+      appId: '1:123:web:abc',
+    },
+    databaseId: '(default)',
   },
   missing: [],
-  access_restricted: true,
+  invalid: [],
+  message: null,
+} as const
+
+function firebaseUser(
+  uid = 'firebase-uid-123',
+  overrides: Partial<FakeFirebaseUser> = {},
+): FakeFirebaseUser {
+  return {
+    uid,
+    email: TRADING_APP_ALLOWED_EMAIL,
+    displayName: 'Analyst',
+    photoURL: null,
+    emailVerified: true,
+    getIdToken: vi.fn().mockResolvedValue('fresh-token'),
+    ...overrides,
+  }
 }
 
-const disabledAuth: AuthConfigResponse = {
-  required: false,
-  configured: false,
-  firebase: {},
-  missing: [],
-  access_restricted: false,
-}
-
-const session: SessionResponse = {
-  authenticated: true,
-  user: {
-    uid: 'user-1',
-    email: 'analyst@example.com',
-    name: 'Analyst',
-  },
-}
-
-function ProtectedWorkspace() {
+function ProtectedWorkspace({ onCleanup }: { onCleanup?: ProtectedCleanup }) {
   const auth = useAuth()
+  useEffect(() => {
+    if (!onCleanup) return undefined
+    return auth.registerProtectedCleanup(onCleanup)
+  }, [auth, onCleanup])
   return (
     <div data-testid="protected-workstation">
-      <span>{auth.user?.email}</span>
-      {auth.canLogout ? (
-        <button type="button" onClick={() => void auth.logout()}>
-          LOGOUT
-        </button>
-      ) : null}
+      <span>{auth.user?.uid}</span>
+      <button type="button" onClick={() => void auth.logout()}>LOGOUT</button>
     </div>
   )
 }
 
-function renderAuth() {
+function renderAuth(
+  verifyAccess: VerifyFirestoreAccess = vi.fn().mockResolvedValue(undefined),
+  onCleanup?: ProtectedCleanup,
+) {
   return render(
-    <AuthProvider>
+    <AuthProvider verifyAccess={verifyAccess}>
       <AuthBoundary>
-        <ProtectedWorkspace />
+        <ProtectedWorkspace {...(onCleanup ? { onCleanup } : {})} />
       </AuthBoundary>
     </AuthProvider>,
   )
 }
 
-async function waitForFirebaseObserver() {
+async function waitForObserver() {
   await waitFor(() => expect(mocks.authObserver).not.toBeNull())
 }
 
@@ -131,178 +143,197 @@ async function emitAuthUser(user: FakeFirebaseUser | null) {
 }
 
 beforeEach(() => {
+  mocks.fakeAuth.currentUser = null
   mocks.authObserver = null
   mocks.authErrorObserver = null
-  mocks.fakeAuth.currentUser = null
-  mocks.apiClient.getAuthConfig.mockReset()
-  mocks.apiClient.getSession.mockReset()
-  mocks.apiClient.setAuthTokenProvider.mockReset()
-  mocks.apiClient.setUnauthorizedHandler.mockReset()
-  mocks.initializeFirebaseAuth.mockReset().mockResolvedValue(mocks.fakeAuth)
+  mocks.unsubscribe.mockReset()
+  mocks.getValidation.mockReset().mockReturnValue(validConfiguration)
+  mocks.ensurePersistence.mockReset().mockResolvedValue(undefined)
   mocks.signInWithEmail.mockReset().mockResolvedValue(undefined)
   mocks.signInWithGoogle.mockReset().mockResolvedValue(undefined)
   mocks.firebaseSignOut.mockReset().mockResolvedValue(undefined)
-  mocks.unsubscribe.mockReset()
 })
 
-describe('AuthProvider state machine', () => {
-  it('shows setup-required state and safe missing variable names', async () => {
-    mocks.apiClient.getAuthConfig.mockResolvedValue({
-      ...configuredAuth,
-      configured: false,
-      missing: ['FIREBASE_WEB_API_KEY', '<unsafe-value>'],
+describe('Firebase-only AuthProvider', () => {
+  it('shows only missing/invalid Firebase variable names and never starts auth', async () => {
+    mocks.getValidation.mockReturnValue({
+      ok: false,
+      config: null,
+      missing: ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_PROJECT_ID'],
+      invalid: ['VITE_FIREBASE_DATABASE_ID'],
+      message: 'Required Firebase Web configuration is missing.',
     })
 
     renderAuth()
 
-    expect(await screen.findByRole('heading', { name: 'SETUP REQUIRED' })).toBeVisible()
-    expect(screen.getByText('FIREBASE_WEB_API_KEY')).toBeVisible()
-    expect(screen.queryByText('<unsafe-value>')).not.toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'FIREBASE SETUP REQUIRED' })).toBeVisible()
+    expect(screen.getByText('VITE_FIREBASE_API_KEY')).toBeVisible()
+    expect(screen.getByText('VITE_FIREBASE_PROJECT_ID')).toBeVisible()
+    expect(screen.getByText('VITE_FIREBASE_DATABASE_ID')).toBeVisible()
     expect(screen.queryByTestId('protected-workstation')).not.toBeInTheDocument()
-    expect(mocks.initializeFirebaseAuth).not.toHaveBeenCalled()
+    expect(mocks.ensurePersistence).not.toHaveBeenCalled()
+    expect(mocks.authObserver).toBeNull()
   })
 
-  it('opens an auth-disabled local session without a bearer token', async () => {
-    mocks.apiClient.getAuthConfig.mockResolvedValue(disabledAuth)
-    mocks.apiClient.getSession.mockResolvedValue({
-      ...session,
-      user: { ...session.user, auth_disabled: true },
-    })
-
-    renderAuth()
-
-    expect(await screen.findByTestId('protected-workstation')).toHaveTextContent(
-      'analyst@example.com',
-    )
-    expect(mocks.apiClient.getSession).toHaveBeenCalledWith(
-      expect.objectContaining({ token: null, protected: false }),
-    )
-    expect(mocks.initializeFirebaseAuth).not.toHaveBeenCalled()
-  })
-
-  it('keeps the workstation hidden until a fresh token is verified by the backend', async () => {
-    mocks.apiClient.getAuthConfig.mockResolvedValue(configuredAuth)
-    mocks.apiClient.getSession.mockResolvedValue(session)
-    const user = { getIdToken: vi.fn().mockResolvedValue('fresh-id-token') }
-
-    renderAuth()
-    await waitForFirebaseObserver()
-    expect(screen.queryByTestId('protected-workstation')).not.toBeInTheDocument()
-
-    await emitAuthUser(user)
-
-    expect(await screen.findByTestId('protected-workstation')).toBeVisible()
-    expect(user.getIdToken).toHaveBeenCalledWith(true)
-    expect(mocks.apiClient.getSession).toHaveBeenCalledWith(
-      expect.objectContaining({ token: 'fresh-id-token', protected: true }),
-    )
-    expect(localStorage.length).toBe(0)
-  })
-
-  it('maps Google and email sign-in failures without offering registration', async () => {
+  it('supports Google and email login without making any FastAPI request', async () => {
     const user = userEvent.setup()
-    mocks.apiClient.getAuthConfig.mockResolvedValue(configuredAuth)
-    mocks.signInWithGoogle.mockRejectedValue({ code: 'auth/popup-blocked' })
-    mocks.signInWithEmail.mockRejectedValue({ code: 'auth/invalid-credential' })
-
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
     renderAuth()
-    await waitForFirebaseObserver()
+    await waitForObserver()
     await emitAuthUser(null)
 
     await user.click(screen.getByRole('button', { name: 'CONTINUE WITH GOOGLE' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('sign-in popup was blocked')
+    expect(mocks.signInWithGoogle).toHaveBeenCalledWith(mocks.fakeAuth)
 
-    await user.type(screen.getByLabelText('Email address'), 'person@example.com')
-    await user.type(screen.getByLabelText('Password'), 'incorrect-password')
+    await emitAuthUser(null)
+    await user.type(screen.getByLabelText('Email address'), ` ${TRADING_APP_ALLOWED_EMAIL.toUpperCase()} `)
+    await user.type(screen.getByLabelText('Password'), 'existing-password')
     await user.click(screen.getByRole('button', { name: /LOGIN TO TERMINAL/ }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('Email or password is incorrect')
+
     expect(mocks.signInWithEmail).toHaveBeenCalledWith(
       mocks.fakeAuth,
-      'person@example.com',
-      'incorrect-password',
+      TRADING_APP_ALLOWED_EMAIL.toUpperCase(),
+      'existing-password',
     )
+    expect(fetchSpy).not.toHaveBeenCalled()
     expect(screen.queryByText(/sign up|register|create account/i)).not.toBeInTheDocument()
   })
 
-  it('renders an account-not-authorized terminal after backend 403', async () => {
-    mocks.apiClient.getAuthConfig.mockResolvedValue(configuredAuth)
-    mocks.apiClient.getSession.mockRejectedValue({ status: 403, message: 'server detail' })
-    const user = { getIdToken: vi.fn().mockResolvedValue('rejected-id-token') }
-
-    renderAuth()
-    await waitForFirebaseObserver()
-    await emitAuthUser(user)
-
-    expect(await screen.findByRole('heading', { name: 'ACCOUNT NOT AUTHORIZED' })).toBeVisible()
-    expect(screen.queryByTestId('protected-workstation')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /RETURN TO LOGIN/ })).toBeVisible()
-  })
-
-  it('immediately hides protected data when any later API request returns 403', async () => {
-    mocks.apiClient.getAuthConfig.mockResolvedValue(configuredAuth)
-    mocks.apiClient.getSession.mockResolvedValue(session)
-    const firebaseUser = { getIdToken: vi.fn().mockResolvedValue('id-token') }
-
-    renderAuth()
-    await waitForFirebaseObserver()
-    await emitAuthUser(firebaseUser)
-    await screen.findByTestId('protected-workstation')
-    const handler = mocks.apiClient.setForbiddenHandler.mock.calls.at(-1)?.[0] as
-      | (() => void)
-      | undefined
-    expect(handler).toBeTypeOf('function')
-    act(() => handler?.())
-    expect(screen.queryByTestId('protected-workstation')).not.toBeInTheDocument()
-    expect(await screen.findByRole('heading', { name: 'ACCOUNT NOT AUTHORIZED' })).toBeVisible()
-  })
-
-  it('signs Firebase out and returns to login after an expired backend session', async () => {
-    mocks.apiClient.getAuthConfig.mockResolvedValue(configuredAuth)
-    mocks.apiClient.getSession.mockRejectedValue({ status: 401 })
-    const user = { getIdToken: vi.fn().mockResolvedValue('expired-id-token') }
-
-    renderAuth()
-    await waitForFirebaseObserver()
-    await emitAuthUser(user)
-
-    expect(await screen.findByText('Your session has expired. Please sign in again.')).toBeVisible()
-    expect(mocks.firebaseSignOut).toHaveBeenCalledWith(mocks.fakeAuth)
-    expect(screen.queryByTestId('protected-workstation')).not.toBeInTheDocument()
-  })
-
-  it('clears protected UI immediately when the user logs out', async () => {
+  it('rejects another email before an email/password Firebase request is made', async () => {
     const user = userEvent.setup()
-    mocks.apiClient.getAuthConfig.mockResolvedValue(configuredAuth)
-    mocks.apiClient.getSession.mockResolvedValue(session)
-    const firebaseUser = { getIdToken: vi.fn().mockResolvedValue('id-token') }
-
     renderAuth()
-    await waitForFirebaseObserver()
-    await emitAuthUser(firebaseUser)
+    await waitForObserver()
+    await emitAuthUser(null)
+
+    await user.type(screen.getByLabelText('Email address'), 'another@example.com')
+    await user.type(screen.getByLabelText('Password'), 'not-sent-to-firebase')
+    await user.click(screen.getByRole('button', { name: /LOGIN TO TERMINAL/ }))
+
+    expect(mocks.signInWithEmail).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent(TRADING_APP_ACCESS_DENIED_MESSAGE)
+    expect(screen.queryByTestId('protected-workstation')).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['another Firebase email', { email: 'another@example.com', emailVerified: true }],
+    ['an unverified owner email', { email: TRADING_APP_ALLOWED_EMAIL, emailVerified: false }],
+    ['a missing Firebase email', { email: null, emailVerified: true }],
+  ])('signs out %s before Firestore verification or workspace rendering', async (_label, identity) => {
+    const verifyAccess = vi.fn().mockResolvedValue(undefined)
+    const disallowedUser = firebaseUser('disallowed-uid', identity)
+    renderAuth(verifyAccess)
+    await waitForObserver()
+
+    await emitAuthUser(disallowedUser)
+
+    await waitFor(() => expect(mocks.firebaseSignOut).toHaveBeenCalledWith(mocks.fakeAuth))
+    expect(verifyAccess).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('protected-workstation')).not.toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toHaveTextContent(TRADING_APP_ACCESS_DENIED_MESSAGE)
+  })
+
+  it('keeps the workspace hidden while checking Firestore, then reveals it on an empty-query success', async () => {
+    let resolveAccess: (() => void) | undefined
+    const verifyAccess = vi.fn(
+      () => new Promise<void>((resolve) => {
+        resolveAccess = resolve
+      }),
+    )
+    const currentUser = firebaseUser()
+    renderAuth(verifyAccess)
+    await waitForObserver()
+
+    await emitAuthUser(currentUser)
+    expect(await screen.findByRole('heading', { name: 'CHECKING FIRESTORE ACCESS' })).toBeVisible()
+    expect(screen.queryByTestId('protected-workstation')).not.toBeInTheDocument()
+    expect(verifyAccess).toHaveBeenCalledWith(currentUser.uid)
+
+    await act(async () => resolveAccess?.())
+    expect(await screen.findByTestId('protected-workstation')).toHaveTextContent(currentUser.uid)
+    expect(mocks.authObserver).not.toBeNull()
+  })
+
+  it('shows rule-deployment guidance and retries a permission denial', async () => {
+    const user = userEvent.setup()
+    const verifyAccess = vi
+      .fn()
+      .mockRejectedValueOnce({ code: 'permission-denied' })
+      .mockResolvedValueOnce(undefined)
+    const currentUser = firebaseUser('approved-format-uid')
+    renderAuth(verifyAccess)
+    await waitForObserver()
+    await emitAuthUser(currentUser)
+
+    expect(await screen.findByRole('heading', { name: 'FIRESTORE ACCESS DENIED' })).toBeVisible()
+    expect(screen.getByRole('alert')).toHaveTextContent(/email-only Firestore Rules/u)
+    expect(screen.queryByText(/tradingagents_members/u)).not.toBeInTheDocument()
+    expect(screen.queryByTestId('protected-workstation')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /RETRY ACCESS/ }))
+    expect(await screen.findByTestId('protected-workstation')).toHaveTextContent(currentUser.uid)
+    expect(verifyAccess).toHaveBeenCalledTimes(2)
+  })
+
+  it('retains the signed-in UID through a retryable Firestore failure and retries access', async () => {
+    const user = userEvent.setup()
+    const verifyAccess = vi
+      .fn()
+      .mockRejectedValueOnce({ code: 'unavailable' })
+      .mockResolvedValueOnce(undefined)
+    const currentUser = firebaseUser('retained-uid')
+    renderAuth(verifyAccess)
+    await waitForObserver()
+    await emitAuthUser(currentUser)
+
+    expect(await screen.findByRole('heading', { name: 'FIRESTORE UNAVAILABLE' })).toBeVisible()
+    expect(mocks.fakeAuth.currentUser?.uid).toBe(currentUser.uid)
+    expect(mocks.firebaseSignOut).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: /RETRY FIRESTORE/ }))
+    expect(await screen.findByTestId('protected-workstation')).toHaveTextContent(currentUser.uid)
+    expect(verifyAccess).toHaveBeenCalledTimes(2)
+  })
+
+  it('refreshes Firebase auth once for an unauthenticated Firestore check without signing out', async () => {
+    const verifyAccess = vi
+      .fn()
+      .mockRejectedValueOnce({ code: 'unauthenticated' })
+      .mockResolvedValueOnce(undefined)
+    const currentUser = firebaseUser('refresh-uid')
+    renderAuth(verifyAccess)
+    await waitForObserver()
+    await emitAuthUser(currentUser)
+
+    expect(await screen.findByTestId('protected-workstation')).toBeVisible()
+    expect(currentUser.getIdToken).toHaveBeenCalledWith(true)
+    expect(verifyAccess).toHaveBeenCalledTimes(2)
+    expect(mocks.firebaseSignOut).not.toHaveBeenCalled()
+  })
+
+  it('runs every protected listener cleanup before Firebase sign-out', async () => {
+    const user = userEvent.setup()
+    const order: string[] = []
+    const cleanupOne = vi.fn(() => order.push('cleanup-one'))
+    mocks.firebaseSignOut.mockImplementation(async () => {
+      order.push('firebase-signout')
+    })
+    const currentUser = firebaseUser('cleanup-uid')
+    renderAuth(vi.fn().mockResolvedValue(undefined), cleanupOne)
+    await waitForObserver()
+    await emitAuthUser(currentUser)
     await screen.findByTestId('protected-workstation')
 
     await user.click(screen.getByRole('button', { name: 'LOGOUT' }))
 
+    expect(cleanupOne).toHaveBeenCalledOnce()
+    expect(order).toEqual(['cleanup-one', 'firebase-signout'])
     expect(screen.queryByTestId('protected-workstation')).not.toBeInTheDocument()
-    expect(await screen.findByRole('heading', { name: 'Sign in to workstation' })).toBeVisible()
-    expect(mocks.firebaseSignOut).toHaveBeenCalledTimes(1)
   })
 
-  it('installs a fresh-enough token provider for every protected API request', async () => {
-    mocks.apiClient.getAuthConfig.mockResolvedValue(configuredAuth)
-    renderAuth()
-    await waitForFirebaseObserver()
-
-    const firebaseUser = { getIdToken: vi.fn().mockResolvedValue('request-token') }
-    mocks.fakeAuth.currentUser = firebaseUser
-    const providers = mocks.apiClient.setAuthTokenProvider.mock.calls
-      .map(([candidate]) => candidate)
-      .filter((candidate): candidate is () => Promise<string | null> => typeof candidate === 'function')
-    const provider = providers.at(-1)
-
-    expect(provider).toBeDefined()
-    await expect(provider?.()).resolves.toBe('request-token')
-    expect(firebaseUser.getIdToken).toHaveBeenCalledWith(false)
-    expect(localStorage.getItem('firebase-id-token')).toBeNull()
+  it('unsubscribes the single auth observer on unmount', async () => {
+    const view = renderAuth()
+    await waitForObserver()
+    view.unmount()
+    expect(mocks.unsubscribe).toHaveBeenCalledOnce()
   })
 })

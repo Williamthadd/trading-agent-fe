@@ -1,55 +1,17 @@
-import { getApp, getApps, initializeApp, type FirebaseApp, type FirebaseOptions } from 'firebase/app'
 import {
-  browserLocalPersistence,
-  getAuth,
   GoogleAuthProvider,
-  setPersistence,
   signInWithEmailAndPassword,
   signInWithPopup,
   type Auth,
   type User,
 } from 'firebase/auth'
 
-import type { FirebaseWebConfig } from '../api/types'
-
-const FIREBASE_APP_NAME = 'tradingagents-web'
-const persistenceTasks = new WeakMap<Auth, Promise<void>>()
+import { ensureFirebaseAuthPersistence } from '../firebase/client'
 
 export type FirebaseAuthUser = User
 
-function asFirebaseOptions(config: FirebaseWebConfig): FirebaseOptions {
-  return {
-    apiKey: config.apiKey,
-    authDomain: config.authDomain,
-    projectId: config.projectId,
-    appId: config.appId,
-    ...(config.messagingSenderId ? { messagingSenderId: config.messagingSenderId } : {}),
-    ...(config.storageBucket ? { storageBucket: config.storageBucket } : {}),
-    ...(config.measurementId ? { measurementId: config.measurementId } : {}),
-  }
-}
-
-function findOrCreateApp(config: FirebaseWebConfig): FirebaseApp {
-  const existing = getApps().find((candidate) => candidate.name === FIREBASE_APP_NAME)
-  return existing ?? initializeApp(asFirebaseOptions(config), FIREBASE_APP_NAME)
-}
-
-/**
- * Creates exactly one named Firebase app and establishes durable browser auth
- * persistence before any auth observer is installed.
- */
-export async function initializeFirebaseAuth(config: FirebaseWebConfig): Promise<Auth> {
-  const auth = getAuth(findOrCreateApp(config))
-  let persistenceTask = persistenceTasks.get(auth)
-  if (!persistenceTask) {
-    persistenceTask = setPersistence(auth, browserLocalPersistence)
-    persistenceTasks.set(auth, persistenceTask)
-  }
-  await persistenceTask
-  return auth
-}
-
 export async function signInWithGoogle(auth: Auth): Promise<void> {
+  await ensureFirebaseAuthPersistence()
   const provider = new GoogleAuthProvider()
   provider.setCustomParameters({ prompt: 'select_account' })
   await signInWithPopup(auth, provider)
@@ -60,6 +22,7 @@ export async function signInWithEmail(
   email: string,
   password: string,
 ): Promise<void> {
+  await ensureFirebaseAuthPersistence()
   await signInWithEmailAndPassword(auth, email, password)
 }
 
@@ -100,11 +63,4 @@ export function friendlyFirebaseError(error: unknown): string {
     default:
       return 'Authentication could not be completed. Please try again.'
   }
-}
-
-/** Useful when a host application has already initialized the named app. */
-export function getInitializedFirebaseApp(): FirebaseApp | null {
-  return getApps().some((candidate) => candidate.name === FIREBASE_APP_NAME)
-    ? getApp(FIREBASE_APP_NAME)
-    : null
 }

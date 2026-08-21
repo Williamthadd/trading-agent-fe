@@ -13,38 +13,6 @@ export interface HealthResponse {
   active_runs: number
 }
 
-export interface FirebaseWebConfig {
-  apiKey: string
-  authDomain: string
-  projectId: string
-  appId: string
-  messagingSenderId?: string
-  storageBucket?: string
-  measurementId?: string
-}
-
-export interface AuthConfigResponse {
-  required: boolean
-  configured: boolean
-  firebase: FirebaseWebConfig | Record<string, never>
-  missing: string[]
-  access_restricted: boolean
-}
-
-export interface SessionUser {
-  uid: string
-  email: string | null
-  name?: string | null
-  picture?: string | null
-  email_verified?: boolean
-  auth_disabled?: boolean
-}
-
-export interface SessionResponse {
-  authenticated: true
-  user: SessionUser
-}
-
 export interface OptionItem {
   id: string
   label: string
@@ -114,6 +82,14 @@ export interface RunRequest {
   anthropic_effort?: 'low' | 'medium' | 'high'
 }
 
+/** The launch endpoint acknowledges a run; all subsequent detail comes from Firestore. */
+export interface RunCreateResponse {
+  run_id: string
+  ticker?: string
+  status?: string
+  [key: string]: unknown
+}
+
 export type RunStatus =
   | 'queued'
   | 'pending'
@@ -150,10 +126,14 @@ export interface TradingRun {
   analysis_date: string
   output_language?: string
   analysts?: string[]
-  research_depth?: 1 | 3 | 5
+  research_depth?: number
   llm_provider?: string
   quick_model?: string
   deep_model?: string
+  backend_url?: string | null
+  thinking_level?: string | null
+  reasoning_effort?: string | null
+  anthropic_effort?: string | null
   asset_type?: string
   status: RunStatus
   progress?: number | { percent?: number; fraction?: number; value?: number }
@@ -167,16 +147,12 @@ export interface TradingRun {
   final_state?: Record<string, unknown>
   result?: Record<string, unknown>
   error?: unknown
-  created_at?: string
-  updated_at?: string
-  completed_at?: string
+  created_at?: string | null
+  updated_at?: string | null
+  started_at?: string | null
+  completed_at?: string | null
+  duration_seconds?: number
   date_key?: string
   events?: RunEvent[] | Record<string, RunEvent>
   [key: string]: unknown
-}
-
-export interface HistoryResponse {
-  date: string | null
-  count: number
-  runs: TradingRun[]
 }

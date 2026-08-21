@@ -2362,6 +2362,97 @@ fieldset.form-section {
   color: var(--red);
 }
 
+.engine-notice {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  padding: 8px 9px;
+  border-bottom: 1px solid rgb(241 212 76 / 36%);
+  border-left: 3px solid var(--yellow);
+  color: var(--muted);
+  background: var(--warning-bg);
+  font-size: calc(8px * var(--text-scale));
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.engine-notice strong {
+  color: var(--yellow);
+  font-family: var(--mono);
+  font-size: calc(8px * var(--text-scale));
+  letter-spacing: 0.04em;
+}
+
+.engine-notice span {
+  grid-column: 1;
+}
+
+.engine-notice button {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-self: center;
+  min-height: 27px;
+  padding: 4px 6px;
+  border: 1px solid currentcolor;
+  color: var(--orange-2);
+  background: var(--black);
+  font-family: var(--mono);
+  font-size: calc(7px * var(--text-scale));
+  font-weight: 900;
+}
+
+.engine-notice button:hover {
+  color: var(--black);
+  background: var(--orange-2);
+}
+
+.engine-notice--error {
+  border-color: rgb(255 93 100 / 50%);
+  background: var(--negative-bg);
+}
+
+.engine-notice--error strong {
+  color: var(--red);
+}
+
+.run-detail-warning {
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  padding: 7px 9px;
+  border-bottom: 1px solid rgb(255 93 100 / 50%);
+  border-left: 3px solid var(--red);
+  color: var(--red);
+  background: var(--negative-bg);
+  font-family: var(--mono);
+  font-size: calc(8px * var(--text-scale));
+  font-weight: 800;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.run-detail-warning button {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 3px 7px;
+  border: 1px solid currentcolor;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.run-detail-warning button:hover,
+.run-detail-warning button:focus-visible {
+  color: var(--ink);
+  background: rgb(255 93 100 / 22%);
+}
+
 .history-card__summary {
   color: var(--dim);
 }
@@ -3034,6 +3125,20 @@ fieldset.form-section {
     right: 8px;
     bottom: 30px;
     width: calc(100vw - 16px);
+  }
+
+  .engine-notice {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .engine-notice button,
+  .engine-notice span {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .engine-notice button {
+    justify-self: start;
   }
 }
 

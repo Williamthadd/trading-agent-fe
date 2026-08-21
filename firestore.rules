@@ -1,0 +1,32 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function canReadTradingHistory() {
+      return request.auth != null
+        && request.auth.token.email == 'williamthudd@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    // Legacy membership records are not part of authorization and remain
+    // private if an older deployment created them.
+    match /tradingagents_members/{legacyMemberUid} {
+      allow read, write: if false;
+    }
+
+    match /trading_runs/{runId} {
+      allow get, list: if canReadTradingHistory();
+      allow create, update, delete: if false;
+
+      // Parent rules do not automatically cover subcollections.
+      match /events/{eventId} {
+        allow get, list: if canReadTradingHistory();
+        allow create, update, delete: if false;
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

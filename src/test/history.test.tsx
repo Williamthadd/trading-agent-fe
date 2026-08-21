@@ -1,12 +1,45 @@
-import { act, render, renderHook, screen, waitFor } from '@testing-library/react'
+import { act, render, renderHook, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { delay, http, HttpResponse } from 'msw'
 import { describe, expect, it, vi } from 'vitest'
+import type { TradingRun } from '../api/types'
 import { DailyHistory } from '../components/DailyHistory'
+import type {
+  HistoryError,
+  HistorySnapshotInfo,
+  TradingHistoryRepository,
+} from '../firebase/tradingHistoryRepository'
 import { useHistory, type HistoryState } from '../hooks/useHistory'
 import { addLocalDays, toLocalDateKey } from '../utils/date'
 import { completedRunFixture } from './fixtures'
-import { server } from './server'
+
+interface DayListener {
+  date: string
+  onData: (runs: TradingRun[], info: HistorySnapshotInfo) => void
+  onError: (error: HistoryError) => void
+  unsubscribed: boolean
+}
+
+class FakeHistoryRepository implements TradingHistoryRepository {
+  readonly dayListeners: DayListener[] = []
+
+  async verifyReadAccess(): Promise<void> {}
+
+  subscribeDay(
+    date: string,
+    onData: DayListener['onData'],
+    onError: DayListener['onError'],
+  ): () => void {
+    const listener = { date, onData, onError, unsubscribed: false }
+    this.dayListeners.push(listener)
+    return () => {
+      listener.unsubscribed = true
+    }
+  }
+
+  subscribeRun(): () => void {
+    return () => undefined
+  }
+}
 
 describe('daily history', () => {
   it('navigates local calendar days, blocks future dates, returns today, and refreshes', async () => {
@@ -18,10 +51,12 @@ describe('daily history', () => {
       count: 0,
       loading: false,
       error: null,
+      source: 'server',
       setDate: vi.fn(),
       moveDay: vi.fn(),
       today: vi.fn(),
       refresh: vi.fn(),
+      clear: vi.fn(),
     }
     const { rerender } = render(
       <DailyHistory history={history} selectedRun={null} active={false} onSelect={vi.fn()} />,
@@ -38,31 +73,51 @@ describe('daily history', () => {
     expect(history.today).toHaveBeenCalledOnce()
   })
 
-  it('uses abort/generation guards so an older date response cannot overwrite a newer one', async () => {
+  it('guards stale listener callbacks and unsubscribes on date changes, clear, and unmount', () => {
+    const repository = new FakeHistoryRepository()
     const today = toLocalDateKey()
     const yesterday = addLocalDays(today, -1)
-    server.use(
-      http.get('http://127.0.0.1:8000/api/history', async ({ request }) => {
-        const date = new URL(request.url).searchParams.get('date')
-        if (date === today) {
-          await delay(150)
-          return HttpResponse.json({
-            date,
-            count: 1,
-            runs: [{ ...completedRunFixture, ticker: 'STALE' }],
-          })
-        }
-        return HttpResponse.json({
-          date,
-          count: 1,
-          runs: [{ ...completedRunFixture, ticker: 'FRESH' }],
-        })
-      }),
-    )
-    const { result } = renderHook(() => useHistory(true))
+    const { result, unmount } = renderHook(() => useHistory(true, repository))
+    const first = repository.dayListeners[0]
+    expect(first?.date).toBe(today)
+
     act(() => result.current.setDate(yesterday))
-    await waitFor(() => expect(result.current.runs[0]?.ticker).toBe('FRESH'))
-    await new Promise((resolve) => setTimeout(resolve, 200))
+    const second = repository.dayListeners[1]
+    expect(first?.unsubscribed).toBe(true)
+    expect(second?.date).toBe(yesterday)
+
+    act(() => {
+      second?.onData([{ ...completedRunFixture, ticker: 'FRESH' }], { fromCache: false })
+      first?.onData([{ ...completedRunFixture, ticker: 'STALE' }], { fromCache: false })
+    })
     expect(result.current.runs[0]?.ticker).toBe('FRESH')
+    expect(result.current.source).toBe('server')
+
+    act(() => result.current.clear())
+    expect(second?.unsubscribed).toBe(true)
+    expect(result.current.runs).toEqual([])
+    unmount()
+  })
+
+  it('clears cards and revalidates authentication on listener permission loss', () => {
+    const repository = new FakeHistoryRepository()
+    const onAccessFailure = vi.fn()
+    const { result } = renderHook(() => useHistory(true, repository, onAccessFailure))
+    const listener = repository.dayListeners[0]
+
+    act(() => listener?.onData([completedRunFixture], { fromCache: false }))
+    expect(result.current.runs).toHaveLength(1)
+
+    const denial: HistoryError = {
+      code: 'permission-denied',
+      operation: 'subscribe-day',
+      message: 'Access denied.',
+      retryable: false,
+    }
+    act(() => listener?.onError(denial))
+
+    expect(result.current.runs).toEqual([])
+    expect(result.current.source).toBe('unavailable')
+    expect(onAccessFailure).toHaveBeenCalledWith(denial)
   })
 })

@@ -3,5 +3,17 @@ dist/
 playwright-report/
 test-results/
 .env.local
+.env.*.local
+.firebase/
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+firebase-export-*/
+emulator-data/
+.firebase-emulator-data/
+app-check-debug-token*
+secrets/
+*service-account*.json
+*.pem
 .DS_Store
 *.log

@@ -59,23 +59,23 @@ describe('ApiClient', () => {
     expect(requests).toBe(1)
   })
 
-  it('normalizes FastAPI validation arrays, non-JSON failures, and unauthorized callbacks', async () => {
-    const unauthorized = vi.fn()
-    const forbidden = vi.fn()
+  it('normalizes FastAPI validation arrays and keeps backend authorization failures local to callers', async () => {
+    let optionsRequest = 0
     server.use(
-      http.get('http://api.test/api/options', () => HttpResponse.json({ detail: [{ loc: ['body', 'ticker'], msg: 'invalid symbol', type: 'value_error' }] }, { status: 422 })),
-      http.get('http://api.test/api/history', () => new HttpResponse('gateway exploded', { status: 503 })),
-      http.get('http://api.test/api/runs/expired', () => HttpResponse.json({ detail: 'expired' }, { status: 401 })),
-      http.get('http://api.test/api/runs/forbidden', () => HttpResponse.json({ detail: 'denied' }, { status: 403 })),
+      http.get('http://api.test/api/options', () => {
+        optionsRequest += 1
+        if (optionsRequest === 1) {
+          return HttpResponse.json({ detail: [{ loc: ['body', 'ticker'], msg: 'invalid symbol', type: 'value_error' }] }, { status: 422 })
+        }
+        if (optionsRequest === 2) return HttpResponse.json({ detail: 'expired' }, { status: 401 })
+        return HttpResponse.json({ detail: 'denied' }, { status: 403 })
+      }),
+      http.get('http://api.test/api/health', () => new HttpResponse('gateway exploded', { status: 503 })),
     )
     const client = new ApiClient('http://api.test')
-    client.setUnauthorizedHandler(unauthorized)
-    client.setForbiddenHandler(forbidden)
     await expect(client.getOptions()).rejects.toMatchObject({ status: 422, message: 'ticker: invalid symbol' })
-    await expect(client.getHistory('2026-08-20')).rejects.toBeInstanceOf(ApiError)
-    await expect(client.getRun('expired')).rejects.toMatchObject({ status: 401 })
-    expect(unauthorized).toHaveBeenCalledOnce()
-    await expect(client.getRun('forbidden')).rejects.toMatchObject({ status: 403 })
-    expect(forbidden).toHaveBeenCalledOnce()
+    await expect(client.getHealth()).rejects.toBeInstanceOf(ApiError)
+    await expect(client.getOptions()).rejects.toMatchObject({ status: 401 })
+    await expect(client.getOptions()).rejects.toMatchObject({ status: 403 })
   })
 })
