@@ -5,6 +5,7 @@ test-results/
 .env.local
 .env.*.local
 .firebase/
+.vercel/
 firebase-debug.log*
 firestore-debug.log*
 ui-debug.log*

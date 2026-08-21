@@ -72,6 +72,10 @@ Another Google account may still complete Firebase's identity-provider handshake
 
 Revocation is handled by disabling the Firebase Auth user or changing and deploying the exact-email rule. A separate UID membership document is neither required nor consulted.
 
+## Deploy to Vercel
+
+This repository includes a Vercel SPA configuration and a fail-fast deployment environment check. Follow [VERCEL_DEPLOYMENT.md](./VERCEL_DEPLOYMENT.md) for the dashboard and CLI procedures, required Firebase Web variables, Firebase Authorized Domains setup, and backend CORS configuration.
+
 ## Run mode 1: login and history only
 
 FastAPI may remain stopped:
@@ -91,7 +95,7 @@ This mode is backend-offline, not internet-offline. Firebase Authentication and 
 Start the backend in a separate terminal:
 
 ```powershell
-cd W:\AI\Agent\TradingAgents
+cd YOUR PATH
 conda activate tradingagents
 python -m pip install -e ".[api]"
 tradingagents-api
@@ -177,6 +181,7 @@ Preview a production build with `npm run preview`. The preview origin is `http:/
 | --- | --- |
 | `npm run dev` | Start Vite on port 5173 |
 | `npm run build` | Strict TypeScript build and production bundle |
+| `npm run build:vercel` | Validate the Vercel environment, then build `dist` |
 | `npm run preview` | Serve the production bundle locally |
 | `npm run lint` | Run ESLint |
 | `npm test` | Run unit/component tests without requiring emulators |
