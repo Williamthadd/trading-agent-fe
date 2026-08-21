@@ -33,28 +33,6 @@ if (databaseId !== null && databaseId !== '(default)') {
   problems.push('VITE_FIREBASE_DATABASE_ID must be exactly (default).')
 }
 
-const apiOrigin = nonEmptyEnvironmentValue('VITE_TRADINGAGENTS_API_URL')
-if (apiOrigin !== null) {
-  try {
-    const url = new URL(apiOrigin)
-    const normalizedPath = url.pathname.replace(/\/+$/u, '')
-    if (
-      url.protocol !== 'https:' ||
-      url.username ||
-      url.password ||
-      normalizedPath ||
-      url.search ||
-      url.hash
-    ) {
-      throw new Error('invalid production API origin')
-    }
-  } catch {
-    problems.push(
-      'VITE_TRADINGAGENTS_API_URL must be a public HTTPS origin without credentials, a path, query string, or fragment. Omit it for history-only mode.',
-    )
-  }
-}
-
 if (problems.length > 0) {
   console.error('Vercel deployment environment validation failed:')
   for (const problem of problems) console.error(`- ${problem}`)
