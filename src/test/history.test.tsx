@@ -1,4 +1,4 @@
-import { act, render, renderHook, screen } from '@testing-library/react'
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { TradingRun } from '../api/types'
@@ -21,8 +21,15 @@ interface DayListener {
 
 class FakeHistoryRepository implements TradingHistoryRepository {
   readonly dayListeners: DayListener[] = []
+  readonly latestDateRequests: string[] = []
+  latestDate: string | null = toLocalDateKey()
 
   async verifyReadAccess(): Promise<void> {}
+
+  async getLatestHistoryDate(maxDateKey: string): Promise<string | null> {
+    this.latestDateRequests.push(maxDateKey)
+    return this.latestDate
+  }
 
   subscribeDay(
     date: string,
@@ -73,11 +80,26 @@ describe('daily history', () => {
     expect(history.today).toHaveBeenCalledOnce()
   })
 
-  it('guards stale listener callbacks and unsubscribes on date changes, clear, and unmount', () => {
+  it('opens the latest stored history day instead of defaulting to an empty today', async () => {
+    const repository = new FakeHistoryRepository()
+    const today = toLocalDateKey()
+    const latestStoredDate = addLocalDays(today, -4)
+    repository.latestDate = latestStoredDate
+
+    const { result } = renderHook(() => useHistory(true, repository))
+
+    await waitFor(() => expect(repository.dayListeners).toHaveLength(1))
+    expect(repository.latestDateRequests).toEqual([today])
+    expect(repository.dayListeners[0]?.date).toBe(latestStoredDate)
+    expect(result.current.date).toBe(latestStoredDate)
+  })
+
+  it('guards stale listener callbacks and unsubscribes on date changes, clear, and unmount', async () => {
     const repository = new FakeHistoryRepository()
     const today = toLocalDateKey()
     const yesterday = addLocalDays(today, -1)
     const { result, unmount } = renderHook(() => useHistory(true, repository))
+    await waitFor(() => expect(repository.dayListeners).toHaveLength(1))
     const first = repository.dayListeners[0]
     expect(first?.date).toBe(today)
 
@@ -99,10 +121,11 @@ describe('daily history', () => {
     unmount()
   })
 
-  it('clears cards and revalidates authentication on listener permission loss', () => {
+  it('clears cards and revalidates authentication on listener permission loss', async () => {
     const repository = new FakeHistoryRepository()
     const onAccessFailure = vi.fn()
     const { result } = renderHook(() => useHistory(true, repository, onAccessFailure))
+    await waitFor(() => expect(repository.dayListeners).toHaveLength(1))
     const listener = repository.dayListeners[0]
 
     act(() => listener?.onData([completedRunFixture], { fromCache: false }))

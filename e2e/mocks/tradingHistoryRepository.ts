@@ -8,6 +8,7 @@ export interface HistoryError { code: string; operation: string; message: string
 export interface HistorySnapshotInfo { fromCache: boolean; complete?: boolean }
 export interface TradingHistoryRepository {
   verifyReadAccess(uid: string): Promise<void>
+  getLatestHistoryDate(maxDateKey: string): Promise<string | null>
   subscribeDay(
     date: string,
     onData: (runs: TradingRun[], info: HistorySnapshotInfo) => void,
@@ -62,6 +63,14 @@ function trackListener(): { active: () => boolean; unsubscribe: Unsubscribe } {
 
 export const tradingHistoryRepository: TradingHistoryRepository = {
   async verifyReadAccess() {},
+  async getLatestHistoryDate(maxDateKey) {
+    return data()
+      .map((run) => run.date_key ?? run.analysis_date)
+      .filter((dateKey): dateKey is string =>
+        typeof dateKey === 'string' && dateKey <= maxDateKey,
+      )
+      .sort((left, right) => right.localeCompare(left))[0] ?? null
+  },
   subscribeDay(date, onData) {
     const listener = trackListener()
     queueMicrotask(() => {

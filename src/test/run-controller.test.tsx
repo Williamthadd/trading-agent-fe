@@ -35,6 +35,7 @@ class FakeHistoryRepository implements TradingHistoryRepository {
   readonly runListeners: RunListener[] = []
 
   async verifyReadAccess(): Promise<void> {}
+  async getLatestHistoryDate(): Promise<string | null> { return null }
   subscribeDay(): () => void { return () => undefined }
   subscribeRun(
     runId: string,

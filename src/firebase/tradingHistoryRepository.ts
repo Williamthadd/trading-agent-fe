@@ -5,6 +5,7 @@ import {
   getDocs,
   limit,
   onSnapshot,
+  orderBy,
   query,
   where,
   type DocumentData,
@@ -91,7 +92,12 @@ export type HistoryErrorCode =
   | 'configuration'
   | 'unknown'
 
-export type HistoryOperation = 'verify-access' | 'subscribe-day' | 'subscribe-run' | 'subscribe-events'
+export type HistoryOperation =
+  | 'verify-access'
+  | 'find-latest-day'
+  | 'subscribe-day'
+  | 'subscribe-run'
+  | 'subscribe-events'
 
 export interface HistoryError {
   readonly code: HistoryErrorCode
@@ -110,6 +116,7 @@ export interface HistorySnapshotInfo {
 
 export interface TradingHistoryRepository {
   verifyReadAccess(userUid: string): Promise<void>
+  getLatestHistoryDate(maxDateKey: string): Promise<string | null>
   subscribeDay(
     dateKey: string,
     onData: (runs: TradingRun[], info: HistorySnapshotInfo) => void,
@@ -142,9 +149,11 @@ export interface FirestoreReadAdapter {
   collection(...segments: string[]): unknown
   document(...segments: string[]): unknown
   equal(field: string, value: unknown): unknown
+  atMost(field: string, value: unknown): unknown
+  descending(field: string): unknown
   take(count: number): unknown
   buildQuery(base: unknown, constraints: readonly unknown[]): unknown
-  getDocuments(target: unknown): Promise<{ readonly fromCache: boolean }>
+  getDocuments(target: unknown): Promise<ReadQuerySnapshot>
   listenQuery(
     target: unknown,
     onData: (snapshot: ReadQuerySnapshot) => void,
@@ -625,12 +634,14 @@ function createFirestoreReadAdapter(database: Firestore): FirestoreReadAdapter {
     collection: (...segments) => collection(database, segments[0] ?? '', ...segments.slice(1)),
     document: (...segments) => doc(database, segments[0] ?? '', ...segments.slice(1)),
     equal: (field, value) => where(field, '==', value),
+    atMost: (field, value) => where(field, '<=', value),
+    descending: (field) => orderBy(field, 'desc'),
     take: (count) => limit(count),
     buildQuery: (base, constraints) =>
       query(base as Query<DocumentData>, ...(constraints as QueryConstraint[])),
     getDocuments: async (target) => {
       const snapshot = await getDocs(target as Query<DocumentData>)
-      return { fromCache: snapshot.metadata.fromCache }
+      return wrapQuerySnapshot(snapshot)
     },
     listenQuery: (target, onData, onError) =>
       onSnapshot(
@@ -693,6 +704,40 @@ export function createTradingHistoryRepository(
         }
       } catch (error) {
         throw normalizeHistoryError(error, 'verify-access')
+      }
+    },
+
+    async getLatestHistoryDate(maxDateKey) {
+      if (!isValidDateKey(maxDateKey)) {
+        throw invalidArgument(
+          'find-latest-day',
+          'The latest history lookup requires a real maximum date in YYYY-MM-DD format.',
+        )
+      }
+      const adapter = requireReads('find-latest-day')
+      const runs = adapter.collection(RUNS_COLLECTION)
+      const latestQuery = adapter.buildQuery(runs, [
+        adapter.atMost('date_key', maxDateKey),
+        adapter.descending('date_key'),
+        adapter.take(1),
+      ])
+      try {
+        const snapshot = await adapter.getDocuments(latestQuery)
+        if (snapshot.fromCache) {
+          throw new TradingHistoryRepositoryError(
+            'unavailable',
+            'find-latest-day',
+            'The latest Firestore history date could not be confirmed by the server. Retry the archive.',
+            true,
+          )
+        }
+        const latestDocument = snapshot.docs[0]?.data()
+        const latestDate = isRecord(latestDocument)
+          ? normalizedString(latestDocument.date_key)
+          : ''
+        return isValidDateKey(latestDate) ? latestDate : null
+      } catch (error) {
+        throw normalizeHistoryError(error, 'find-latest-day')
       }
     },
 

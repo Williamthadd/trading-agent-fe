@@ -35,6 +35,7 @@ class FakeReadAdapter implements FirestoreReadAdapter {
   readonly documentListeners: Array<FakeListener<ReadDocumentSnapshot>> = []
   getDocumentsError: unknown = null
   getDocumentsFromCache = false
+  getDocumentsDocs: ReadDocumentSnapshot[] = []
   listenQueryError: unknown = null
   getDocumentsCalls = 0
 
@@ -52,6 +53,14 @@ class FakeReadAdapter implements FirestoreReadAdapter {
     return { kind: 'equal', field, value }
   }
 
+  atMost(field: string, value: unknown): unknown {
+    return { kind: 'at-most', field, value }
+  }
+
+  descending(field: string): unknown {
+    return { kind: 'descending', field }
+  }
+
   take(count: number): unknown {
     return { kind: 'limit', count }
   }
@@ -61,11 +70,11 @@ class FakeReadAdapter implements FirestoreReadAdapter {
     return { kind: 'query', base, constraints }
   }
 
-  async getDocuments(target: unknown): Promise<{ fromCache: boolean }> {
+  async getDocuments(target: unknown): Promise<ReadQuerySnapshot> {
     void target
     this.getDocumentsCalls += 1
     if (this.getDocumentsError !== null) throw this.getDocumentsError
-    return { fromCache: this.getDocumentsFromCache }
+    return { fromCache: this.getDocumentsFromCache, docs: this.getDocumentsDocs }
   }
 
   listenQuery(
@@ -145,6 +154,32 @@ describe('tradingHistoryRepository', () => {
     await expect(repository.verifyReadAccess('firebase-user-1')).rejects.not.toThrow(
       /secret backend document content/u,
     )
+  })
+
+  it('finds the latest valid stored date at or before today with one indexed query', async () => {
+    const adapter = new FakeReadAdapter()
+    adapter.getDocumentsDocs = [
+      fakeDocument('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', {
+        date_key: '2026-08-19',
+      }),
+    ]
+    const repository = repositoryWith(adapter)
+
+    await expect(repository.getLatestHistoryDate('2026-08-21')).resolves.toBe('2026-08-19')
+    expect(adapter.collectionCalls).toEqual([[RUNS_COLLECTION]])
+    expect(adapter.buildCalls[0]?.constraints).toEqual([
+      { kind: 'at-most', field: 'date_key', value: '2026-08-21' },
+      { kind: 'descending', field: 'date_key' },
+      { kind: 'limit', count: 1 },
+    ])
+    expect(adapter.getDocumentsCalls).toBe(1)
+
+    adapter.getDocumentsDocs = []
+    await expect(repository.getLatestHistoryDate('2026-08-21')).resolves.toBeNull()
+    await expect(repository.getLatestHistoryDate('not-a-date')).rejects.toMatchObject({
+      code: 'invalid-argument',
+      operation: 'find-latest-day',
+    })
   })
 
   it('uses only date_key equality, performs no event reads, and sorts daily cards client-side', () => {

@@ -46,8 +46,50 @@ export function useHistory(
   const [error, setError] = useState<string | null>(null)
   const [source, setSource] = useState<HistorySource>(enabled ? 'checking' : 'unavailable')
   const [refreshKey, setRefreshKey] = useState(0)
+  const [latestLookupKey, setLatestLookupKey] = useState(0)
+  const [dateResolved, setDateResolved] = useState(!enabled)
   const generation = useRef(0)
+  const latestDateGeneration = useRef(0)
   const unsubscribeRef = useRef<Unsubscribe | null>(null)
+
+  useEffect(() => {
+    const lookupGeneration = ++latestDateGeneration.current
+
+    if (!enabled) {
+      setDateResolved(false)
+      return
+    }
+
+    const maximumDate = toLocalDateKey()
+    setDateResolved(false)
+    setRuns([])
+    setLoading(true)
+    setError(null)
+    setSource('checking')
+
+    void repository.getLatestHistoryDate(maximumDate)
+      .then((latestDate) => {
+        if (lookupGeneration !== latestDateGeneration.current) return
+        setDateState(latestDate ?? maximumDate)
+        setDateResolved(true)
+      })
+      .catch((cause: HistoryError) => {
+        if (lookupGeneration !== latestDateGeneration.current) return
+        setRuns([])
+        setLoading(false)
+        setError(safeHistoryError(cause))
+        setSource('unavailable')
+        if (cause.code === 'permission-denied' || cause.code === 'unauthenticated') {
+          onAccessFailure?.(cause)
+        }
+      })
+
+    return () => {
+      if (lookupGeneration === latestDateGeneration.current) {
+        latestDateGeneration.current += 1
+      }
+    }
+  }, [enabled, latestLookupKey, onAccessFailure, repository])
 
   useEffect(() => {
     unsubscribeRef.current?.()
@@ -61,6 +103,8 @@ export function useHistory(
       setSource('unavailable')
       return
     }
+
+    if (!dateResolved) return
 
     setRuns([])
     setLoading(true)
@@ -107,22 +151,31 @@ export function useHistory(
       unsubscribeRef.current?.()
       unsubscribeRef.current = null
     }
-  }, [date, enabled, onAccessFailure, refreshKey, repository])
+  }, [date, dateResolved, enabled, onAccessFailure, refreshKey, repository])
 
   const setDate = useCallback((next: string) => {
     const today = toLocalDateKey()
+    latestDateGeneration.current += 1
+    setDateResolved(true)
     setDateState(next > today ? today : next)
   }, [])
 
   const clear = useCallback(() => {
     generation.current += 1
+    latestDateGeneration.current += 1
     unsubscribeRef.current?.()
     unsubscribeRef.current = null
+    setDateResolved(false)
     setRuns([])
     setLoading(false)
     setError(null)
     setSource('unavailable')
   }, [])
+
+  const refresh = useCallback(() => {
+    if (dateResolved) setRefreshKey((value) => value + 1)
+    else setLatestLookupKey((value) => value + 1)
+  }, [dateResolved])
 
   return {
     date,
@@ -134,7 +187,7 @@ export function useHistory(
     setDate,
     moveDay: (amount) => setDate(addLocalDays(date, amount)),
     today: () => setDate(toLocalDateKey()),
-    refresh: () => setRefreshKey((value) => value + 1),
+    refresh,
     clear,
   }
 }

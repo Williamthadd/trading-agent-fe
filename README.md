@@ -86,7 +86,7 @@ Copy-Item .env.example .env.local
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173). After Firebase login and a server-authorized history probe, Daily History, archived events, reports, and Final Trading Decisions remain available from Firestore. The workstation shows `HISTORY ONLY` and disables analysis-engine controls.
+Open [http://localhost:5173](http://localhost:5173). After Firebase login and a server-authorized history probe, Daily History opens on the newest stored day at or before today; archived events, reports, and Final Trading Decisions remain available from Firestore. The workstation shows `HISTORY ONLY` and disables analysis-engine controls.
 
 This mode is backend-offline, not internet-offline. Firebase Authentication and Cloud Firestore must still be reachable. It cannot start agents, call Gemini or Ollama, retrieve current runtime options, or read runs stored only in the backend's local JSON fallback.
 
@@ -129,7 +129,7 @@ If the backend reports local/local-JSON storage, existing Firestore history rema
 This frontend repository is the sole source of truth for deployed Firestore Rules and indexes:
 
 - `firestore.rules` grants read-only run/event access only when the Firebase token has the exact verified email `williamthudd@gmail.com`; no UID membership document is required.
-- `firestore.indexes.json` contains no composite indexes; the daily query uses only `where("date_key", "==", selectedDate)` and sorts client-side.
+- `firestore.indexes.json` contains no composite indexes. Archive startup finds the newest available day with `where("date_key", "<=", today)`, descending `orderBy("date_key")`, and `limit(1)`; the selected daily query uses `where("date_key", "==", selectedDate)` and sorts runs client-side. Both use Firestore's automatic single-field index.
 - `firebase.json` pins the local Firestore Emulator to `127.0.0.1:8080`.
 
 Install the Firebase CLI dependency locally, authenticate, select the exact project, test the rules, and deploy deliberately:
@@ -142,7 +142,7 @@ npm run test:rules
 npx firebase deploy --only firestore:rules --project YOUR_PROJECT_ID
 ```
 
-`npm run test:rules` uses a forced `demo-*` project ID and the local Emulator; test seeding occurs only with Security Rules disabled. The suite proves unauthenticated denial, exact verified-email access without a membership document, rejection of other or unverified emails, read-only enforcement, legacy-collection secrecy, catch-all denial, nested event access, and the production daily query.
+`npm run test:rules` uses a forced `demo-*` project ID and the local Emulator; test seeding occurs only with Security Rules disabled. The suite proves unauthenticated denial, exact verified-email access without a membership document, rejection of other or unverified emails, read-only enforcement, legacy-collection secrecy, catch-all denial, nested event access, the latest-day lookup, and the production daily query.
 
 Before deployment, verify the Firebase CLI project, frontend project ID, backend project ID, service-account `project_id`, and both `(default)` database IDs again. Never deploy permissive temporary rules to make a demo pass.
 

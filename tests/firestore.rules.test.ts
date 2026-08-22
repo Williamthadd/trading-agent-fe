@@ -10,6 +10,8 @@ import {
   doc,
   getDocFromServer,
   getDocsFromServer,
+  limit,
+  orderBy,
   query,
   setDoc,
   updateDoc,
@@ -164,6 +166,23 @@ describe('read-only TradingAgents Firestore rules', () => {
         query(
           collection(db, 'trading_runs'),
           where('date_key', '==', DATE_KEY),
+        ),
+      ),
+    )
+    expect(result.docs.map((snapshot) => snapshot.id)).toEqual([RUN_ID])
+  })
+
+  it('allows the bounded latest history day query used when the archive opens', async () => {
+    await seed({ includeRuns: true })
+    const db = authenticatedDb(OWNER_UID)
+
+    const result = await assertSucceeds(
+      getDocsFromServer(
+        query(
+          collection(db, 'trading_runs'),
+          where('date_key', '<=', DATE_KEY),
+          orderBy('date_key', 'desc'),
+          limit(1),
         ),
       ),
     )
